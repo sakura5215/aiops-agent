@@ -1,0 +1,9 @@
+external_data_path: data/external/records.csv
+
+# 滑动窗口短期记忆：每次喂给模型的历史消息条数上限（控制上下文长度，避免长对话 token 膨胀）
+memory_window: 20
+
+# mem0 式长期记忆开关：开启后每轮对话抽取原子事实去重入库，检索时按相似度召回注入 prompt
+long_term_memory_enabled: true
+# 长期记忆每次召回的事实条数
+memory_recall_k: 3

@@ -1,0 +1,19 @@
+# 向量库统一配置：通过 provider 字段在 Chroma / Milvus 后端间切换
+# 简历口径为 Milvus，默认即 milvus；保留 chroma 便于对照与回退
+provider: milvus
+
+collection_name: agent
+k: 3
+data_path: data
+md5_hex_store: md5.text
+allow_knowledge_file_type: ["txt", "pdf"]
+
+chunk_size: 200
+chunk_overlap: 20
+separators: ["\n\n", "\n", ".", "!", "?", "。", "! ", "? ", " ", ""]
+
+# Chroma 后端（对照保留）
+chroma_persist_directory: chroma_db
+
+# Milvus Lite 后端：单文件 .db 落地，零部署，需 pymilvus >= 2.4.8
+milvus_uri: milvus_data/milvus.db
