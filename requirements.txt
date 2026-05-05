@@ -1,0 +1,17 @@
+# AIOps 智能运维问答系统依赖
+# 注意：本项目的 ReAct Agent 基于 langchain 1.x 的 create_agent + middleware 机制，
+# 需 langchain >= 1.0 与 langgraph >= 1.0。
+
+langchain>=1.0.0
+langchain-core>=1.0.0
+langchain-community>=0.3.0
+langchain-chroma>=0.2.0
+langchain-milvus>=0.2.0
+langchain-text-splitters>=0.3.0
+langgraph>=1.0.0
+pymilvus>=2.4.8          # 启用 Milvus Lite 单文件模式，无需独立部署服务端
+chromadb>=0.5.0          # Chroma 后端依赖（provider=chroma 时需要）
+streamlit>=1.30.0
+dashscope>=1.20.0        # 通义千问 Qwen / text-embedding 底层 SDK
+pyyaml>=6.0
+pypdf>=4.0
