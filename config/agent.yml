@@ -3,7 +3,14 @@ external_data_path: data/external/records.csv
 # 滑动窗口短期记忆：每次喂给模型的历史消息条数上限（控制上下文长度，避免长对话 token 膨胀）
 memory_window: 20
 
-# mem0 式长期记忆开关：开启后每轮对话抽取原子事实去重入库，检索时按相似度召回注入 prompt
+# 长期记忆开关：开启后每轮对话抽取原子事实去重入库，检索时按相似度召回注入 prompt
 long_term_memory_enabled: true
-# 长期记忆每次召回的事实条数
+# 长期记忆每次召回的条数
 memory_recall_k: 3
+# viking 分层记忆开关：开启走"mem0 治理 + viking 分层组织与目录递归检索"，
+# 关闭回退到 mem0 扁平 top-k 版（agent/memory_store.py）
+viking_enabled: true
+# 目录级 L0 阈值：扫 .abstract.md 定位高分目录时，余弦相似度低于该值视为不相关
+viking_dir_threshold: 0.30
+# 条目级 L0 阈值：目录内扫条目摘要时，余弦相似度低于该值视为不相关
+viking_entry_threshold: 0.25

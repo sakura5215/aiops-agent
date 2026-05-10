@@ -23,14 +23,22 @@ class VectorStoreBackend:
     def add_documents(self, documents: list[Document]) -> None:
         raise NotImplementedError
 
+    def similarity_search_with_score(self, query: str, k: int) -> list[tuple[Document, float]]:
+        """带相似度分数的检索，返回 [(Document, score)]。
+
+        余弦相似度，score 越大越相似。viking 的目录递归检索需要在 L0 阶段做阈值
+        过滤（锁定多个高分目录而不是只取 top-1），所以这里必须带分。
+        """
+        raise NotImplementedError
+
 
 class ChromaBackend(VectorStoreBackend):
     """基于 langchain-chroma 的本地持久化向量库后端。"""
 
-    def __init__(self):
+    def __init__(self, collection_name: str | None = None):
         from langchain_chroma import Chroma
         self.store = Chroma(
-            collection_name=vector_conf["collection_name"],
+            collection_name=collection_name or vector_conf["collection_name"],
             embedding_function=embed_model,
             persist_directory=get_abs_path(vector_conf["chroma_persist_directory"]),
         )
@@ -41,17 +49,20 @@ class ChromaBackend(VectorStoreBackend):
     def add_documents(self, documents: list[Document]) -> None:
         self.store.add_documents(documents)
 
+    def similarity_search_with_score(self, query: str, k: int) -> list[tuple[Document, float]]:
+        return self.store.similarity_search_with_score(query, k=k)
+
 
 class MilvusBackend(VectorStoreBackend):
     """基于 Milvus Lite 的向量库后端。Milvus Lite 以单文件 .db 形式落地，无需独立部署服务端。"""
 
-    def __init__(self):
+    def __init__(self, collection_name: str | None = None):
         from langchain_milvus import Milvus
         uri = get_abs_path(vector_conf["milvus_uri"])
         os.makedirs(os.path.dirname(uri), exist_ok=True)
         self.store = Milvus(
             embedding_function=embed_model,
-            collection_name=vector_conf["collection_name"],
+            collection_name=collection_name or vector_conf["collection_name"],
             connection_args={"uri": uri},
         )
 
@@ -60,6 +71,9 @@ class MilvusBackend(VectorStoreBackend):
 
     def add_documents(self, documents: list[Document]) -> None:
         self.store.add_documents(documents)
+
+    def similarity_search_with_score(self, query: str, k: int) -> list[tuple[Document, float]]:
+        return self.store.similarity_search_with_score(query, k=k)
 
 
 def build_backend() -> VectorStoreBackend:

@@ -33,14 +33,32 @@ class ReactAgent:
             ],
             middleware=[monitor_tool, log_before_model, report_prompt_switch],
         )
-        # mem0 式长期记忆：初始化失败时降级关闭，不阻断 agent 启动
-        self.memory_store = None
+        # 长期记忆：优先 viking 分层记忆（mem0 治理 + viking 分层组织与检索），
+        # 可用 config/agent.yml 的 viking_enabled 关掉回退到 mem0 扁平版，
+        # 两者都初始化失败时降级关闭，不阻断 agent 启动
+        self.viking = None
+        self.mem0_store = None
         if agent_conf.get("long_term_memory_enabled", True):
+            use_viking = agent_conf.get("viking_enabled", True)
             try:
-                from agent.memory_store import MemoryStore
-                self.memory_store = MemoryStore()
+                if use_viking:
+                    from agent.viking import VikingMemoryStore
+                    self.viking = VikingMemoryStore()
+                    logger.info("[ReactAgent]viking 分层记忆已启用")
+                else:
+                    from agent.memory_store import MemoryStore
+                    self.mem0_store = MemoryStore()
+                    logger.info("[ReactAgent]mem0 扁平记忆已启用")
             except Exception as e:
-                logger.warning(f"[ReactAgent]长期记忆初始化失败，降级关闭: {e}")
+                logger.warning(f"[ReactAgent]viking 初始化失败，回退 mem0 扁平记忆: {e}")
+                self.viking = None
+                # 降级要落到能用的那一条：viking 起不来不等于 mem0 也起不来
+                try:
+                    from agent.memory_store import MemoryStore
+                    self.mem0_store = MemoryStore()
+                    logger.info("[ReactAgent]已回退到 mem0 扁平记忆")
+                except Exception as e2:
+                    logger.warning(f"[ReactAgent]mem0 兜底也失败，长期记忆降级关闭: {e2}")
 
     def _get_session_history(self, session_id: str) -> FileChatMessageHistory:
         # 每个对话id对应一个不同文件
@@ -109,10 +127,13 @@ class ReactAgent:
         ai_message = self._get_ai_message(result)
         if ai_message:
             history.add_message(ai_message)     # 会自动序列化写入文件
-            # mem0 式长期记忆写入：从本轮交流抽取原子事实去重入库
-            if agent_conf.get("long_term_memory_enabled", True) and self.memory_store:
+            # 长期记忆写入：从本轮交流抽取原子事实去重入库
+            if agent_conf.get("long_term_memory_enabled", True) and (self.viking or self.mem0_store):
                 try:
-                    self.memory_store.add([user_msg, ai_message], user_id=str(session_id))
+                    if self.viking:
+                        self.viking.commit([user_msg, ai_message], session_id=str(session_id))
+                    else:
+                        self.mem0_store.add([user_msg, ai_message], user_id=str(session_id))
                 except Exception as e:
                     logger.warning(f"[ReactAgent]长期记忆写入失败，跳过: {e}")
 
