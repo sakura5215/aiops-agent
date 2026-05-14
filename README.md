@@ -1,12 +1,12 @@
 # OpsPilot · 企业 AIOps 智能运维问答系统
 
-基于 LangGraph StateGraph 编排的 ReAct Agent，面向运维场景提供告警分析、监控指标诊断、日志根因定位与系统运行报告生成。核心设计有三：**双场景动态提示词**（`@dynamic_prompt` 按运行时上下文切换系统提示词）、**信号工具显式声明意图**（`fill_context_for_report` 空操作工具 + 中间件拦截，让 Agent 自主声明"我要进入报告场景"）、**借鉴 mem0 的两阶段长期记忆层**（事实抽取 + 去重合并 + 相似度召回）。
+基于 LangGraph StateGraph 编排的 ReAct Agent，面向运维场景提供告警分析、监控指标诊断、日志根因定位与系统运行报告生成。核心设计有四：**双场景动态提示词**（`@dynamic_prompt` 按运行时上下文切换系统提示词）、**信号工具显式声明意图**（`fill_context_for_report` 空操作工具 + 中间件拦截，让 Agent 自主声明"我要进入报告场景"）、**mem0 式两阶段长期记忆**（事实抽取 + 去重合并 + 相似度召回）、**viking 分层记忆组织**（虚拟文件系统 + 目录递归检索，召回失败可诊断）。
 
 ## 架构
 
 ```mermaid
 flowchart TD
-    U[用户输入] --> RECALL[长期记忆检索<br/>memory_store.search]
+    U[用户输入] --> RECALL[长期记忆检索<br/>viking.recall 目录递归]
     RECALL --> WIN[滑动窗口<br/>recent_messages K 条]
     WIN --> DP{dynamic_prompt<br/>report?}
     DP -->|普通场景| SP1[main_prompt]
@@ -20,8 +20,9 @@ flowchart TD
     CTX --> DP
     TOOLS --> RAG[RAG 知识库检索<br/>Milvus/Chroma adapter]
     MODEL --> OUT[输出]
-    OUT --> EXTRACT[长期记忆写入<br/>抽取事实 + 去重合并]
+    OUT --> EXTRACT[长期记忆写入<br/>抽取事实 + 路由 + 去重合并]
     EXTRACT --> MS[(Milvus memory 库)]
+    RECALL -.trace.-> TRACE[检索轨迹可诊断]
 ```
 
 ## 核心特性
@@ -55,7 +56,7 @@ flowchart TD
 
 数据工具当前对接 mock 数据（`agent_tools.py` 内置），接口已抽象，后续可替换为真实 Prometheus / Elasticsearch / 告警平台数据源。
 
-### 4. 记忆系统（v1 → v2 演进，借鉴 mem0）
+### 4. 记忆系统（短期滑动窗口 + mem0 式 v1/v2 + viking 分层 v3）
 
 记忆分两层，对应短期与长期：
 
@@ -82,6 +83,41 @@ flowchart LR
     Q[下一轮 query] -->|相似度召回| DB
     DB -->|top-K 事实| P[注入 prompt]
 ```
+
+**写入侧已改为增量 upsert**：`fact_id` 作为主键，新增只插不重建，删除只按 `fact_id` 差集删陈旧条目，不再 drop collection 全量重插。
+
+### 4b. viking 分层记忆组织（`agent/viking/`）
+
+mem0 解决"数据怎么进去、怎么治理"，但"数据怎么组织、怎么取"仍是扁平 top-k —— 条目一多，
+召回归谁猜、失败在哪一步都不可见。viking 部分补上组织与取：
+
+- **虚拟文件系统**（`viking_fs.py`）：`memories/` 下 6 个分类目录（user_profile / incidents /
+  solutions / preferences / decisions / misc）。每条记忆自带三级：L0 ≤256 字（供向量定位）、
+  L1 ≤4000 字概览（默认终点）、L2 原文（按需下钻）。目录级另有 `.abstract.md` / `.overview.md`
+  两级摘要，写入只打 dirty 标记，读取时惰性刷新。
+- **意图分析**（`intent_analyzer.py`）：把 query 拆成 0-5 个 `TypedQuery`
+  （MEMORY / RESOURCE / SKILL 三类根目录 + intent + priority）。**中文疑问词**（怎么/如何/为什么…）
+  也算提问，口语里没人打问号，只判 `?` 会把真问题降级成简单查询。
+- **目录递归检索**（`directory_retrieval.py`）：先扫目录级 L0 阈值过滤定位多个目录 → 目录内扫
+  条目级 L0 → 下钻 L1（不够再 L2）→ 聚合。阈值过滤而非只取 top-1，"磁盘满怎么解决"可以同时
+  命中 incidents 和 solutions。
+- **写路径治理**（`memory_viking.py`）：mem0 的治理 + viking 的组织。hash 硬去重 → LLM 分类
+  路由 → **限定同目录**算相似度（0.92 丢弃 / 0.85 触发 LLM 合并）→ 合并后重新路由（语义可能变）。
+  目录级 L0 刷新后同步回索引，否则刚写入的记忆在下次检索时连目录入口都没有。
+- **可诊断性**：全程留 retrieval trace（五步 + 浏览路径），召回失败会留下 `step3_miss`，
+  排查时直接看是哪个目录的 L0 写得不好。
+
+```mermaid
+flowchart LR
+    Q[query] --> IA[IntentAnalyzer<br/>0-5 TypedQuery]
+    IA --> S2[扫目录级 L0<br/>阈值过滤]
+    S2 --> S3[扫条目级 L0]
+    S3 --> S4[L1 默认 / L2 下钻]
+    S4 --> S5[按优先级聚合]
+    S2 --> TR[trace<br/>失败可诊断]
+```
+
+viking 与 mem0 的分工一句话：**mem0 管数据进入的治理，viking 管数据的组织与取**。
 
 ### 5. 向量库 adapter（Chroma / Milvus Lite 切换）
 
@@ -129,7 +165,7 @@ streamlit run app.py
 
 | 文件 | 作用 |
 |---|---|
-| `config/agent.yml` | 滑动窗口大小 `memory_window`、长期记忆开关与召回条数 `memory_recall_k` |
+| `config/agent.yml` | 滑动窗口大小 `memory_window`、长期记忆开关与召回条数 `memory_recall_k`、viking 开关 `viking_enabled` 与检索阈值 `viking_dir_threshold` / `viking_entry_threshold` |
 | `config/vector_store.yml` | 向量库 `provider`（milvus/chroma）、collection、分片参数、Milvus Lite uri |
 | `config/rag.yml` | Qwen 模型名、embedding 模型名 |
 | `config/prompt.yml` | 三套提示词文件路径 |
@@ -142,13 +178,22 @@ streamlit run app.py
 ├── agent/
 │   ├── react_agent.py        # ReAct Agent 编排：滑动窗口 + 记忆注入 + 事实写入
 │   ├── memory.py             # 短期记忆：FileChatMessageHistory + 滑动窗口
-│   └── memory_store.py       # 长期记忆：mem0 式两阶段流水线
+│   ├── memory_store.py       # 长期记忆：mem0 式两阶段流水线（增量 upsert）
+│   ├── viking/               # viking 分层记忆
+│   │   ├── viking_fs.py      # 虚拟文件系统：条目三级 + 目录级 L0/L1 + dirty 惰性刷新
+│   │   ├── intent_analyzer.py# TypedQuery 意图分析与 find/search 选择
+│   │   ├── l0_index.py       # L0 向量索引（VectorStore / 进程内两实现）
+│   │   ├── directory_retrieval.py  # 目录递归检索五步 + retrieval trace
+│   │   └── memory_viking.py  # 写路径治理：去重 → 路由 → 同目录相似度 → 合并
 │   └── tools/
 │       ├── agent_tools.py    # 9 个 @tool，含信号工具 fill_context_for_report
 │       └── middleware.py     # monitor_tool / log_before_model / report_prompt_switch
 ├── rag/
 │   ├── vector_store.py       # 向量库 adapter（Chroma/Milvus）+ MD5 去重加载
 │   └── rag_service.py        # RAG 检索 + 模型总结链
+├── tests/
+│   ├── test_viking.py        # viking 单元测试（A~E 五段）
+│   └── eval_memory_retrieval.py  # 记忆召回评测（flat top-k vs viking）
 ├── model/factory.py          # Qwen 与 embedding 工厂
 ├── prompts/                  # main / report / rag_summarize 三套提示词
 ├── config/                   # 四份 yml 配置
@@ -156,12 +201,34 @@ streamlit run app.py
 └── utils/                    # 配置加载、路径、日志、文件处理、提示词加载
 ```
 
+## 测试与评测
+
+```bash
+# viking 分层记忆单元测试（A~E 五段，91 条断言，全程 mock，不依赖 API key）
+python tests/test_viking.py
+
+# 记忆召回评测：扁平 top-k（mem0 基线） vs viking 目录递归
+python tests/eval_memory_retrieval.py              # 离线确定性路由，结果可复现
+python tests/eval_memory_retrieval.py --k 5        # 换召回条数
+python tests/eval_memory_retrieval.py --intent     # 对照：用真 LLM 做意图分析（非确定性）
+```
+
+两个脚本都用确定性假 embedding，绝对分数只作回归基线，不代表真实模型下的效果；
+`--intent` 走真模型时结果不可复现，仅供对照观察。
+
 ## Roadmap
 
-- **mem0 增量重建**：当前记忆更新采用全量 drop + 重插（v1 简化），后续改为基于主键的增量 upsert，降低大规模事实库的重建开销
-- **viking 分层组织**：借鉴 viking 的分层记忆组织与目录递归检索，对事实按主题/服务/时间分层索引，提升大规模记忆库的检索精度与召回效率
+已完成：
+
+- **mem0 增量 upsert**：`fact_id` 主键增量更新，不再全量 drop + 重插
+- **viking 分层组织**：虚拟文件系统 + 三级条目 + 目录级摘要惰性刷新 + 目录递归检索 + retrieval trace
+- **记忆检索评测**：LoCoMo 思路的合成语料离线评测脚本（Recall@K / Precision / MRR / 命中层级 / 检索步数）
+
+待办：
+
 - **真实数据源接入**：将 `fetch_*` 工具的 mock 数据替换为 Prometheus / Elasticsearch / 告警平台 API
-- **记忆检索评测**：引入 LoCoMo / LongMemEval 思路做记忆召回质量评测
+- **长程记忆评测扩展到真语料**：当前评测用合成语料（8 条记忆 / 8 个查询），上线前需换真实对话日志
+- **目录摘要的 LLM 生成**：当前目录级 L0/L1 由模板归纳（无 LLM 调用），可换成 LLM 生成并做质量评估
 
 ## 技术栈
 

@@ -25,6 +25,9 @@ agent/chat_histories/
 # mem0 式长期记忆事实库（本地运行产物，根目录的 memory_store/ 目录）
 /memory_store/
 
+# viking 虚拟文件系统与去重指纹（本地运行产物，随 vfs base 目录落地）
+/memory_fs/
+
 # 知识库去重记录
 md5.text
 
