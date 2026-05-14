@@ -204,7 +204,7 @@ streamlit run app.py
 ## 测试与评测
 
 ```bash
-# viking 分层记忆单元测试（A~E 五段，91 条断言，全程 mock，不依赖 API key）
+# viking 分层记忆单元测试（A~E 五段，92 条断言，全程 mock，不依赖 API key）
 python tests/test_viking.py
 
 # 记忆召回评测：扁平 top-k（mem0 基线） vs viking 目录递归
