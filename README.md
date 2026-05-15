@@ -146,9 +146,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 4. 配置通义千问 API Key（DashScope）
-#    ChatTongyi 与 DashScopeEmbeddings 默认读取该环境变量
-set DASHSCOPE_API_KEY=sk-your-key-here        # Windows
+#    两种任选其一，缺 key 时 model/factory.py 会在启动时直接报错并给出提示：
+#    a) 环境变量
+set DASHSCOPE_API_KEY=sk-your-key-here        # Windows PowerShell
+set DASHSCOPE_API_KEY=sk-your-key-here        # Windows CMD
 export DASHSCOPE_API_KEY=sk-your-key-here     # macOS / Linux
+#    b) 项目根目录的 .env 文件（已 gitignore，推荐）
+cp .env.example .env    # 然后填入真实 key
 
 # 5. 启动 Streamlit 前端
 streamlit run app.py
@@ -169,6 +173,14 @@ streamlit run app.py
 | `config/vector_store.yml` | 向量库 `provider`（milvus/chroma）、collection、分片参数、Milvus Lite uri |
 | `config/rag.yml` | Qwen 模型名、embedding 模型名 |
 | `config/prompt.yml` | 三套提示词文件路径 |
+| `.env.example` | 密钥文件模板，克隆后复制为 `.env`；`.env` 本身被 gitignore |
+
+## 密钥与安全
+
+- 本仓库是公开的，**任何密钥都不入库**：代码只从环境变量读取 `DASHSCOPE_API_KEY`，可选回退到根目录 `.env`（`.env` 已在 `.gitignore` 中，`.env.example` 只提供格式）。
+- 克隆者需要**自备** DashScope Key 才能跑通；仓库里不含任何可直用的凭据。
+- 聊天历史（`chat_histories/`）与记忆产物（`memory_fs/`、`memory_store/`）同样不入库，避免把业务对话数据推到公开仓库。
+- 万一把某个 key 提交过（哪怕后来删了，历史 commit 仍在），去 DashScope 控制台**轮换/作废**该 key，再干净地改历史（`git filter-repo`）。
 
 ## 项目结构
 

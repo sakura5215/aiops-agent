@@ -14,5 +14,6 @@ milvus-lite>=2.4.0       # pymilvus 的 milvus_lite extra 当前拉不到，必�
 chromadb>=0.5.0          # Chroma 后端依赖（provider=chroma 时需要）
 streamlit>=1.30.0
 dashscope>=1.20.0        # 通义千问 Qwen / text-embedding 底层 SDK
+python-dotenv>=1.0.0     # 读取根目录 .env 里的 DASHSCOPE_API_KEY（未安装时退化为只用环境变量）
 pyyaml>=6.0
 pypdf>=4.0

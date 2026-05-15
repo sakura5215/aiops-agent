@@ -35,6 +35,11 @@ md5.text
 logs/
 *.log
 
+# 本地凭据文件：只提交 .env.example，真实 .env 永远不入库
+.env
+.env.*
+!.env.example
+
 # OS
 .DS_Store
 Thumbs.db
