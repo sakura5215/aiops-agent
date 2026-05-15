@@ -10,6 +10,7 @@ langchain-milvus>=0.2.0
 langchain-text-splitters>=0.3.0
 langgraph>=1.0.0
 pymilvus>=2.4.8          # 启用 Milvus Lite 单文件模式，无需独立部署服务端
+milvus-lite>=2.4.0       # pymilvus 的 milvus_lite extra 当前拉不到，必须单独装，否则连本地 .db 直接报 ConnectionConfigException
 chromadb>=0.5.0          # Chroma 后端依赖（provider=chroma 时需要）
 streamlit>=1.30.0
 dashscope>=1.20.0        # 通义千问 Qwen / text-embedding 底层 SDK

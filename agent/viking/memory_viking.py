@@ -123,7 +123,10 @@ class VikingMemoryStore:
         # 去重指纹跟随 vfs 目录，便于按环境/用例隔离
         self.dedup_path = os.path.join(self.vfs.base, "hashes.json")
         self._hashes: set[str] = self._load_hashes()
-        self.index = index
+        # 写路径直线依赖 self.index（commit_fact -> index.upsert），不做兜底的话
+        # 不传 index 的调用方（如 ReactAgent 的默认构造）会在每次写记忆时崩，
+        # 而异常被上层 except 吞掉只剩一条 warning —— 又一次静默失败
+        self.index = index if index is not None else self._default_index()
         # 阈值是可注入的：离线评测/单测用的是假 embedding，余弦尺度跟真实模型不是一把
         # 尺子，必须能显式固定，否则"调阈值"和"调 embedding"会混淆在一起。
         if dir_threshold is None or entry_threshold is None:
@@ -360,9 +363,13 @@ class VikingMemoryStore:
         abstract, _ = self.vfs.read_dir_meta(category)
         if not abstract:
             return None
+        # metadata 的 key 集合必须和条目级文档一致：Milvus 建表时按首次插入的
+        # 字段生成 schema，字段非空且无默认值，少插一个 key 就整批 insert 失败。
+        # 之前目录级文档没有 entry_id，第一次建表（条目级先写）后目录刷新就一直报错
         return Document(
             page_content=abstract,
             metadata={"level": "dir", "category": category,
+                      "entry_id": f"dir:{category}",
                       "path": f"{MEMORIES_ROOT}/{category}"},
         )
 

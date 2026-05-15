@@ -104,12 +104,19 @@ class ReactAgent:
         # 滑动窗口短期记忆：仅取最近 K 条历史喂回，避免长对话 token 膨胀
         full_messages = history.recent_messages(agent_conf.get("memory_window", 20))
 
-        # mem0 式长期记忆检索：按当前 query 召回相关事实，作为上下文注入
-        if agent_conf.get("long_term_memory_enabled", True) and self.memory_store:
+        # 长期记忆检索：按当前 query 召回相关事实，作为上下文注入
+        # 注意：这里必须走 viking / mem0 两条真实分支。曾经写成 self.memory_store，
+        # 该属性在切 viking 时已被删掉，异常被 except 吞掉只留一条 warning，
+        # 结果长期记忆"一直在跑但永远召回为空"——静默失败，比直接报错更危险
+        store = self.viking or self.mem0_store
+        if agent_conf.get("long_term_memory_enabled", True) and store:
             try:
-                recalled = self.memory_store.search(
-                    query, k=agent_conf.get("memory_recall_k", 3)
-                )
+                if self.viking:
+                    recalled = self.viking.recall(query, k=agent_conf.get("memory_recall_k", 3))
+                else:
+                    recalled = self.mem0_store.search(
+                        query, k=agent_conf.get("memory_recall_k", 3)
+                    )
                 if recalled:
                     memory_context = "以下是与本次提问相关的长期记忆事实，供参考：\n" + \
                         "\n".join(f"- {f}" for f in recalled)
