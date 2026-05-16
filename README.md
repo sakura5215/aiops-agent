@@ -205,6 +205,8 @@ streamlit run app.py
 │   └── rag_service.py        # RAG 检索 + 模型总结链
 ├── tests/
 │   ├── test_viking.py        # viking 单元测试（A~E 五段）
+│   ├── test_memory_system.py # 短期记忆 / mem0 记忆系统单元测试
+│   ├── test_delivery_smoke.py    # 交付验收：仓库卫生 + 离线端到端 + 连通性 + 单测门禁
 │   └── eval_memory_retrieval.py  # 记忆召回评测（flat top-k vs viking）
 ├── model/factory.py          # Qwen 与 embedding 工厂
 ├── prompts/                  # main / report / rag_summarize 三套提示词
@@ -216,14 +218,23 @@ streamlit run app.py
 ## 测试与评测
 
 ```bash
+# 交付验收：仓库卫生（gitignore / 无硬编码密钥 / 全量编译 / 依赖齐全）
+# + 离线端到端（滑动窗口、会话隔离、viking 写入→召回）+ 连通性（有 key 时）+ 单测门禁
+python tests/test_delivery_smoke.py
+
 # viking 分层记忆单元测试（A~E 五段，92 条断言，全程 mock，不依赖 API key）
 python tests/test_viking.py
+
+# 短期记忆与 mem0 记忆系统单元测试（56 条断言）
+python tests/test_memory_system.py
 
 # 记忆召回评测：扁平 top-k（mem0 基线） vs viking 目录递归
 python tests/eval_memory_retrieval.py              # 离线确定性路由，结果可复现
 python tests/eval_memory_retrieval.py --k 5        # 换召回条数
 python tests/eval_memory_retrieval.py --intent     # 对照：用真 LLM 做意图分析（非确定性）
 ```
+
+`test_delivery_smoke.py` 在没有 `DASHSCOPE_API_KEY` 的机器上也能跑，只是把 S3 连通性整段跳过（计入 skipped，不算失败）。
 
 两个脚本都用确定性假 embedding，绝对分数只作回归基线，不代表真实模型下的效果；
 `--intent` 走真模型时结果不可复现，仅供对照观察。

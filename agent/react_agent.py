@@ -1,8 +1,5 @@
 import time
 
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from agent.memory import FileChatMessageHistory
 
@@ -97,7 +94,6 @@ class ReactAgent:
     def execute_stream(self, session_id, query):
         history = self._get_session_history(session_id)
 
-        # 将用户的问题加入历史文件
         user_msg = HumanMessage(content=query)
         history.add_message(user_msg)
 
@@ -130,7 +126,6 @@ class ReactAgent:
             context={"report": False},
         )
 
-        # 提取并保存助手回复到历史文件
         ai_message = self._get_ai_message(result)
         if ai_message:
             history.add_message(ai_message)     # 会自动序列化写入文件

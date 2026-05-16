@@ -14,7 +14,7 @@ from typing import Callable, Optional
 
 from langchain_core.documents import Document
 
-from rag.vector_store import VectorStoreBackend, build_backend
+from rag.vector_store import VectorStoreBackend
 from utils.logger_handler import logger
 
 COLLECTION = "viking_l0"

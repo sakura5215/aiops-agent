@@ -8,10 +8,6 @@ from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_community.chat_models.tongyi import ChatTongyi, BaseChatModel
 from utils.config_handler import rag_conf
 
-# ---------------------------------------------------------------------------
-# 凭据解析：密钥只在运行时从环境读取，绝不写进代码或 config/*.yml（仓库是公开的）
-#   优先级：真实环境变量 > 项目根目录 .env（已被 gitignore）
-# ---------------------------------------------------------------------------
 CREDENTIAL_ENV = "DASHSCOPE_API_KEY"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]

@@ -1,6 +1,5 @@
 # agent/memory.py
 import os, json
-from typing import Sequence
 from langchain_core.messages import BaseMessage, message_to_dict, messages_from_dict
 from langchain_core.chat_history import BaseChatMessageHistory
 

@@ -297,17 +297,13 @@ mock_topology_data = {
 }
 
 
-# -----------------------------
 # RAG 工具：保留
-# -----------------------------
 @tool(description="向向量存储中检索参考资料")
 def rag_summarize(query: str) -> str:
     return rag.rag_summarize(query)
 
 
-# -----------------------------
 # 基础上下文工具
-# -----------------------------
 @tool(description="获取当前待分析的目标服务名称，以纯字符串形式返回")
 def get_target_service() -> str:
     return random.choice(service_list)
@@ -318,9 +314,7 @@ def get_time_range() -> str:
     return random.choice(time_range_list)
 
 
-# -----------------------------
 # 告警 / 指标 / 日志 / 拓扑工具
-# -----------------------------
 @tool(description="获取指定服务在指定时间范围内的告警信息，以结构化字符串形式返回；若未检索到数据则返回空字符串")
 def fetch_alert_data(service_name: str, time_range: str) -> str:
     try:
@@ -361,9 +355,7 @@ def fetch_service_topology(service_name: str) -> str:
         return ""
 
 
-# -----------------------------
 # 报告工具
-# -----------------------------
 def generate_report_data():
     """
     预留函数：

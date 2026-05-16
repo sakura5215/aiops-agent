@@ -17,7 +17,6 @@ AIOps 记忆系统真实可跑测试
 import sys
 import os
 import json
-import time
 import types
 import tempfile
 import shutil

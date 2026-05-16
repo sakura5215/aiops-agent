@@ -16,7 +16,6 @@ import os
 import shutil
 import sys
 import tempfile
-import types
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -100,7 +99,7 @@ def new_index():
 
 def test_viking_fs(tmp):
     section("A. VikingFS 虚拟文件系统")
-    from agent.viking.viking_fs import MemoryEntry, CATEGORIES
+    from agent.viking.viking_fs import MemoryEntry
 
     vfs = new_vfs(tmp)
     vfs.ensure_category("incidents")

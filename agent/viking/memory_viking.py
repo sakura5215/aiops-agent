@@ -36,7 +36,6 @@ from agent.viking.directory_retrieval import (
     RetrievalResult,
 )
 from agent.viking.viking_fs import MEMORIES_ROOT
-from agent.viking.intent_analyzer import parse_typed_queries
 from agent.viking.l0_index import InMemoryL0Index, L0Index, VectorStoreL0Index
 from agent.viking.viking_fs import (
     CATEGORIES,
@@ -48,7 +47,6 @@ from agent.viking.viking_fs import (
 )
 from model.factory import chat_model
 from utils.logger_handler import logger
-from utils.path_tool import get_abs_path
 
 # 双阈值（方案文档 §2.2/§2.3，工程简化版）
 DEDUP_THRESHOLD = 0.92   # 超过此相似度视为重复，丢弃

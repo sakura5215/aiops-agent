@@ -1,12 +1,9 @@
-import time
 import uuid
 import streamlit as st
 from agent.react_agent import ReactAgent
 import traceback
 
-# ----------------------------
 # 页面配置
-# ----------------------------
 st.set_page_config(
     page_title="OpsPilot",
     page_icon="💬",
@@ -14,9 +11,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ----------------------------
 # 样式：极简 ChatGPT 风格 + 隐藏 Streamlit 默认元素
-# ----------------------------
 st.markdown("""
 <style>
     /* 整体背景 */
@@ -216,9 +211,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ----------------------------
 # 初始化
-# ----------------------------
 if "agent" not in st.session_state:
     st.session_state["agent"] = ReactAgent()
 
@@ -261,9 +254,7 @@ def create_new_conversation():
     st.session_state["pending_prompt"] = None
 
 
-# ----------------------------
 # 左侧历史栏
-# ----------------------------
 with st.sidebar:
     st.markdown('<div class="sidebar-title">OpsPilot</div>', unsafe_allow_html=True)
 
@@ -297,9 +288,7 @@ with st.sidebar:
     )
 
 
-# ----------------------------
 # 右侧主聊天区
-# ----------------------------
 current_conv = get_current_conversation()
 messages = current_conv["messages"]
 
@@ -355,17 +344,13 @@ if len(messages) == 0:
     st.markdown("---")
 
 
-# ----------------------------
 # 展示当前会话消息
-# ----------------------------
 for message in messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
 
-# ----------------------------
 # 输入处理
-# ----------------------------
 user_input = st.chat_input("请输入你的问题...")
 
 if st.session_state["pending_prompt"]:
@@ -377,9 +362,7 @@ else:
     prompt = None
 
 
-# ----------------------------
 # 流式输出
-# ----------------------------
 if prompt:
     current_conv = get_current_conversation()
     conv_id = st.session_state["current_conversation_id"]

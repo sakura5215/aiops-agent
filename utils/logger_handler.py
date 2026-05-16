@@ -3,12 +3,10 @@ from utils.path_tool import get_abs_path
 import os
 from datetime import datetime
 
-# 日志保存的根目录
 LOG_ROOT = get_abs_path("logs")
 
 os.makedirs(LOG_ROOT, exist_ok=True)
 
-# 日志格式配置
 DEFAULT_LOG_FORMAT = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d %(message)s'
 )
@@ -26,14 +24,12 @@ def get_logger(
     if logger.handlers:
         return logger
 
-    # 控制台handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(console_level)
     console_handler.setFormatter(DEFAULT_LOG_FORMAT)
 
     logger.addHandler(console_handler)
 
-    # 文件Handler
     if not log_file:
         log_file = os.path.join(LOG_ROOT, f"{name}_{datetime.now().strftime('%y%m%d')}.log")
 
