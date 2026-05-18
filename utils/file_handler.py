@@ -27,16 +27,18 @@ def get_file_md5_hex(filepath: str):    # 获取文件的md5的十六进制字�
         logger.error(e)(f"计算文件{filepath}md5失败，{str(e)}")
         return None
 
-def listdir_with_allowed_type(path: str, allowed_types: tuple[str]):    # 返回文件夹内的文件列表（允许的文件后缀）
+def listdir_with_allowed_type(path: str, allowed_types: tuple[str]):    # 返回文件夹内的文件列表（允许的文件后缀，递归子目录）
     files = []
 
     if not os.path.isdir(path):
         logger.error(f"[listdir_with_allowed_type]{path}不是文件夹")
         return allowed_types
 
-    for f in os.listdir(path):
-        if f.endswith(allowed_types):
-            files.append(os.path.join(path, f))
+    # 递归遍历子目录，使 data/ 下的分类目录（如 real_incidents/）也能被知识库加载
+    for root, _, filenames in os.walk(path):
+        for f in filenames:
+            if f.endswith(allowed_types):
+                files.append(os.path.join(root, f))
 
     return tuple(files)
 

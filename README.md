@@ -285,13 +285,27 @@ python tests/eval_memory_retrieval.py --intent     # 对照：用真 LLM 做意�
 
 - **mem0 增量 upsert**：`fact_id` 主键增量更新，不再全量 drop + 重插
 - **viking 分层组织**：虚拟文件系统 + 三级条目 + 目录级摘要惰性刷新 + 目录递归检索 + retrieval trace
-- **记忆检索评测**：LoCoMo 思路的合成语料离线评测脚本（Recall@K / Precision / MRR / 命中层级 / 检索步数）
+- **记忆检索评测**：LoCoMo 思路的离线评测脚本（Recall@K / Precision / MRR / 命中层级 / 检索步数）
+- **真实语料替换**：长程记忆评测语料与 RAG 知识库，从自造语料替换为「公开真实生产故障复盘」提炼的语料（覆盖 CPU 飙高 / 内存 OOM / 磁盘满 / 连接池耗尽 / 慢 SQL 五类，9 个真实案例，均标注出处），见 `data/real_incidents/`
 
 待办：
 
 - **真实数据源接入**：将 `fetch_*` 工具的 mock 数据替换为 Prometheus / Elasticsearch / 告警平台 API
-- **长程记忆评测扩展到真语料**：当前评测用合成语料（8 条记忆 / 8 个查询），上线前需换真实对话日志
 - **目录摘要的 LLM 生成**：当前目录级 L0/L1 由模板归纳（无 LLM 调用），可换成 LLM 生成并做质量评估
+
+## 真实语料说明
+
+知识库（`data/`）与长程记忆评测（`tests/eval_memory_retrieval.py`）的语料，均提炼自公开真实生产故障复盘，来源包括：
+
+- 阿里云开发者社区《一次 OOM 线上排查实录》（Druid SQL 缓存泄漏 + SQL 拼接）
+- 达梦社区《记某个大型国企客户数据库 OOM 实战》（磁盘 I/O 瓶颈连锁 OOM）
+- BestHub《CPU 100% at 3AM》《Backend Freeze: Connection-Pool Exhaustion》
+- 椰云网络《服务器 CPU 突然飙到 100%》（定时任务叠加）
+- 网硕互联《服务器磁盘满那天》（日志未轮转）
+- 精创网络《Debian 服务器故障复盘》（logrotate copytruncate I/O 风暴）
+- 北冥有鱼《Nginx 日志运维复盘》（stream 自循环）
+
+每个案例文档 `data/real_incidents/*.txt` 均标注原文链接，供溯源。评测用确定性假 embedding（离线可跑、不依赖 API key），绝对分数只作回归基线，不代表真实模型下的效果。
 
 ## 技术栈
 

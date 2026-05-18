@@ -6,7 +6,7 @@ from utils.logger_handler import logger
 
 rag = RagSummarizeService()
 
-# 注：这里没有用到data/records.csv中的数据，不需要提取数据，而是直接写在这里
+# 注：工具数据为内置 mock（演示用），接口已抽象，后续可替换为真实 Prometheus / ES / 告警平台数据源
 service_list = [
     "order-service",
     "payment-service",

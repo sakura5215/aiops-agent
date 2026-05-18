@@ -1,0 +1,26 @@
+# 真实故障复盘：Full GC 频繁 + 备份锁副本导致 CPU 飙高
+
+> 来源：BestHub《CPU 100% at 3AM: Complete Troubleshooting Guide with Real Incident Analysis》
+> 链接：https://www.besthub.dev/articles/cpu-100-at-3-am-complete-troubleshooting-guide-with-real-incident-analysis-57ce03e6f1a7
+
+## 现象
+- 凌晨 3:15 告警：Order Service 主机 A CPU 达 98%，P99 延迟从 200ms 飙到 8s，超时激增
+- `top` 发现 Java 进程在 16 核机器上占用 900%+
+- `jstat` 采样：Old 代 99%，每 30s 一次 Full GC，每次 STW 5-8s，业务线程暂停
+
+## 排查过程
+1. JVM 参数 `-Xmx4g -Xms4g`，4G 堆在当前负载下不足。
+2. Arthas 面板：order-service 线程池 200 线程，180 个处于 TIMED_WAITING（DB 等待）。
+3. DBA 确认：从库被备份任务锁住 → 复制延迟 → 从库查询超时。
+
+## 根因（因果链）
+MySQL 备份锁住从库 → 从库查询超时 → order-service 线程阻塞 → 未释放的请求对象填满 Old 代 → Full GC 频繁 → CPU 100%。
+
+## 解决方案
+- 立即（10 分钟）：杀掉从库上的备份任务，锁释放、查询恢复，CPU 回落。
+- 永久（3 天）：备份移到低峰期；InnoDB 备份加 `--single-transaction` 实现无锁；JVM 堆 `-Xmx` 从 4G 提到 8G 留突发余量；加从库复制延迟监控（>30s 告警）；order-service 加熔断，从库延迟超阈值时切主库。
+
+## 复盘启示
+- CPU 100% 是症状，不是根因；真凶是 DB 备份任务，CPU 是最后的雪崩层。
+- 排查要自底向上：基础设施 → 中间件 → 应用，盯着 CPU 指标本身看不出名堂。
+- Full GC 频繁 + 线程大面积 DB 等待，往往指向「数据库侧问题」而非应用自身。

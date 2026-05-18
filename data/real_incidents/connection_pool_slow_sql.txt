@@ -1,0 +1,27 @@
+# 真实故障复盘：慢 SQL 无索引导致连接池耗尽（三连宕机）
+
+> 来源：BestHub《Why Did Our Backend Freeze? A Deep Dive into Connection-Pool Exhaustion and Slow SQL》
+> 链接：https://www.besthub.dev/articles/why-did-our-backend-freeze-a-deep-dive-into-connection-pool-exhaustion-and-slow-sql-969854f846b2
+
+## 现象
+- 前端资源响应快，但后端请求一直 pending
+- 平均响应时间约 21 秒，QPS/内存/CPU 都正常（非流量问题）
+- JVM 监控：每 5 分钟一次 Full GC，应用被暂停
+- 线程池监控：所有线程忙，大量排队
+- 数据库连接池监控：池已打满
+
+## 排查过程（三连宕机）
+1. 第一次：把 HikariCP `maximum-pool-size` 调到 20，服务短暂恢复。
+2. 第二次：服务又卡死，连接池再次打满，jstack 显示大量线程 TIMED_WAITING，临时靠重新部署清池。
+3. 第三次：资深工程师建议查慢 SQL，发现一条查询执行了 7000+ 次、平均 1.4s，是微信二维码登录轮询的 SQL，`scene` 字段缺索引导致全表扫描。
+
+## 根因
+二维码登录轮询查询缺索引 → 每次全表扫描 → 连接被长时间占用 → 连接池耗尽 → 后端整体卡死。
+
+## 解决方案
+- 给 `scene` 字段加索引，EXPLAIN 确认走索引后，响应恢复正常，连接池占用回落
+
+## 复盘启示
+- 连接池耗尽是「结果」不是「原因」，先扩容能止血但治不了本，要查「为什么连接不释放」
+- 慢 SQL（尤其高频轮询类查询）是连接池打满的常见真凶
+- 临时扩容（加连接池/加实例）要在深入排查前先做，先保命再找根因

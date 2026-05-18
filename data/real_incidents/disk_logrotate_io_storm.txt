@@ -1,0 +1,33 @@
+# 真实故障复盘：logrotate copytruncate 模式引发 I/O 风暴
+
+> 来源：精创网络《Debian 服务器故障复盘与运维优化升级方案》
+> 链接：https://dun.jcwlyf.com/content-52583.html
+
+## 现象
+- 凌晨 2:40 监控告警，核心业务数据库节点磁盘 I/O 延迟飙升到正常值的 50 倍
+- 连带引发 PHP-FPM 进程池耗尽，整个用户端白屏
+
+## 根因
+- 直接触发点是凌晨 2:30 执行的 logrotate 任务
+- 服务器运行多个高流量 Web 应用，Nginx 访问日志 + PHP 错误日志单日超 12GB
+- 旧 logrotate 策略用默认 `copytruncate` 模式，且没设 `delaycompress`
+- logrotate 对正在写入的 12GB 日志截断时，cp 进程瞬间占满磁盘 I/O 带宽，MySQL InnoDB 无法及时刷脏页，事务日志堆积
+- 更致命的是 `copytruncate` 截断瞬间会丢失部分日志行，恰好包含慢查询日志关键条目，废掉后续故障定位能力
+
+## 解决方案
+放弃 `copytruncate`，改用 `create` 模式 + USR1 信号重载。正确配置示例：
+```
+/var/log/nginx/*.log {
+    daily missingok rotate 7 compress delaycompress
+    notifempty create 640 www-data adm sharedscripts
+    postrotate
+        [ -f /var/run/nginx.pid ] && kill -USR1 $(cat /var/run/nginx.pid)
+    endscript
+}
+```
+让 Nginx 自行重新打开日志文件，不存在截断竞争，也不丢日志行。
+
+## 复盘启示
+- `copytruncate` 在高负载大日志场景有 I/O 风暴 + 丢日志双重风险，应用层支持信号重载时应改用 `create` + 信号
+- logrotate 本身可能成为故障导火索，复盘要关注「定时任务 + 高负载」的叠加效应
+- 内核脏页参数（vm.dirty_ratio 等）默认值在高负载下会成为雪崩放大器
