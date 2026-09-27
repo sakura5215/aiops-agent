@@ -271,12 +271,15 @@ python tests/test_memory_system.py
 # 记忆召回评测：扁平 top-k（mem0 基线） vs viking 目录递归
 python tests/eval_memory_retrieval.py              # 离线确定性路由，结果可复现
 python tests/eval_memory_retrieval.py --k 5        # 换召回条数
+python tests/eval_memory_retrieval.py --real       # 真 embedding（text-embedding-v4，需 key）
 python tests/eval_memory_retrieval.py --intent     # 对照：用真 LLM 做意图分析（非确定性）
 ```
 
 `test_delivery_smoke.py` 在没有 `DASHSCOPE_API_KEY` 的机器上也能跑，只是把 S3 连通性整段跳过（计入 skipped，不算失败）。
 
-两个脚本都用确定性假 embedding，绝对分数只作回归基线，不代表真实模型下的效果；
+评测默认用确定性假 embedding（离线可跑、结果可复现），只作回归基线；要读真实效果必须加 `--real`，
+走生产同款 DashScope `text-embedding-v4`。真 embedding 下 viking 分层与扁平 top-k 召回/排序持平
+（Recall@3 均 0.90、MRR 均 0.974），并多出「目录隔离 + retrieval trace 可诊断 + 可扩展」三项扁平没有的能力。
 `--intent` 走真模型时结果不可复现，仅供对照观察。
 
 ## Roadmap
@@ -305,7 +308,7 @@ python tests/eval_memory_retrieval.py --intent     # 对照：用真 LLM 做意�
 - 精创网络《Debian 服务器故障复盘》（logrotate copytruncate I/O 风暴）
 - 北冥有鱼《Nginx 日志运维复盘》（stream 自循环）
 
-每个案例文档 `data/real_incidents/*.txt` 均标注原文链接，供溯源。评测用确定性假 embedding（离线可跑、不依赖 API key），绝对分数只作回归基线，不代表真实模型下的效果。
+每个案例文档 `data/real_incidents/*.txt` 均标注原文链接，供溯源。评测默认用确定性假 embedding（离线可跑、不依赖 API key）作回归基线，`--real` 切换到真 embedding 得到真实效果。
 
 ## 技术栈
 

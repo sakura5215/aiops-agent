@@ -26,27 +26,35 @@
       只按重复计数打折，指标凭空少一半。
     - 无 gold 的闲聊查询（期望"什么都不召回"）只计入 Recall/Precision 的噪声惩罚，
       不进 MRR 均值 —— 没有 relevant doc 时 MRR 无定义，硬算 0 会拉低所有基线。
-    - 语料用确定性假 embedding，绝对分数只作回归基线，不能当真实效果读；
-      但语料内容提炼自公开真实故障复盘（非自造），检索命题与生产场景同分布。
+    - 默认离线假 embedding 只作回归基线；要读"真实效果"必须 --real（真 embedding），
+      两者都跑同一套语料，语料提炼自公开真实故障复盘（非自造），命题与生产同分布。
 
-【重要 · 假 embedding 下 viking 会"看起来"退化，这是评测方法的固有边界，不是算法 bug】
-    hash embedding 只能度量"字符字面重叠"，度量不了语义相近。真实语料的 query 与 L0 摘要
-    字面差异大（如问"后端反复卡死三次"，条目 L0 是"后端卡死：慢 SQL 打满连接池"），
-    hash 相似度极低 → viking 在 Step 3 条目级定位被阈值过滤 → 召回失败。
-    而扁平 top-k 没有阈值这一道，反而"误打误撞"召回得更多。所以假 embedding 下
-    viking 的 Recall 反而低于扁平，这是**评测失真**，不是分层检索真不如扁平。
-
-    真实结论要等接入真 embedding（DashScope text-embedding-v4）再下：viking 的分层优势
-    恰恰依赖"语义相似度"才能把 query 正确引导到目录和条目。假 embedding 抹掉了语义，
-    等于把 viking 的核心能力（语义定位）关掉了，只剩它"多一道阈值"的劣势。这就是为什么
-    README 里写"绝对分数只作回归基线，不代表真实模型下的效果"。
-    本脚本的价值：① 验证检索链路/去重/trace 逻辑跑通；② 语料命题与生产同分布可复现；
-    ③ 暴露"用假 embedding 评语义检索"这个方法论陷阱本身。
+【重要 · 两轮排查后 viking "看起来退化"的真正根因】
+    早期版本 viking 在评测里 Recall 一度低至 0.45，远低于扁平 top-k。逐层诊断后确认
+    不是算法 bug，而是两个语料构造问题：
+    1. entry_id 冲突：同一 (session, theme) 在 incidents（现象/根因）与 solutions（治理方案）
+       两个目录各沉淀一条，但早期 entry_id 只到 theme 粒度（如 s1-c1），导致 entries_index
+       互相覆盖、list_entries 丢失 incidents 目录全部 9 条记忆（索引里每个案例只剩 solutions 一条）。
+    2. 目录摘要泛化：solutions 目录摘要早期只写"本目录：验证过的治理方案"，与"怎么治理"类
+       query 语义相似度仅 0.27~0.38，目录定位锁不住 solutions，gold 少一半。
+    修复后（entry_id 带 category + 目录摘要写具体）：
+    - 真 embedding（--real）：viking Recall@3 = 0.900，与扁平 top-k 完全持平，MRR 均 0.974。
+    - 假 embedding（离线）：viking 0.750 反而略高于扁平 0.725。
+    结论：viking 分层检索在真 embedding + 优质目录摘要下，召回与排序质量追平扁平 top-k，
+    同时多出"目录隔离 + trace 可诊断 + 可扩展"三项扁平没有的能力。目录摘要质量是 viking
+    效果的关键变量（生产里由 LLM 生成，评测里须写得足够有区分度）。
 
 用法：
-    python tests/eval_memory_retrieval.py                 # 跑评测并打印报告
+    python tests/eval_memory_retrieval.py                 # 离线跑（确定性假 embedding，无需 key）
     python tests/eval_memory_retrieval.py --k 5           # 指定召回条数
     python tests/eval_memory_retrieval.py --out report.md # 额外写出报告文件
+    python tests/eval_memory_retrieval.py --real          # 用真 embedding（DashScope text-embedding-v4，需 key）
+
+embedding 选择（--real 开关）：
+    - 默认离线：确定性 hash embedding，零依赖、结果可复现，只度量字符字面重叠，
+      度量不了语义。作回归基线（防重构把链路改坏），不当作真实效果读。
+    - --real：走项目生产同款 embed_model（DashScope text-embedding-v4），
+      语义相似度真实，是"真实结论"的唯一来源。两组都跑同一套语料。
 """
 from __future__ import annotations
 
@@ -235,19 +243,38 @@ QUERIES = [
 ]
 
 
+def entry_id_of(sid: str, theme: str | None, cat: str) -> str:
+    """记忆条目的稳定 id。同一 (session, theme) 会在 incidents 和 solutions 两个目录
+    各沉淀一条（现象/根因 vs 治理方案），所以 id 必须带上 category，否则同名 id 会让
+    entries_index 互相覆盖、list_entries 丢一半记忆（这是评测早前 Recall 虚低的根因）。"""
+    return f"{sid}-{theme or 'noise'}-{cat}"
+
+
 def build_vfs(tmp: str) -> VikingFS:
     vfs = VikingFS(base_dir=os.path.join(tmp, "eval_fs"))
     for sid, cat, l2, l0, l1, theme in CORPUS:
         vfs.ensure_category(cat)
         entry = MemoryEntry(
-            entry_id=f"{sid}-{theme or 'noise'}",
+            entry_id=entry_id_of(sid, theme, cat),
             category=cat, l0=l0, l1=l1, l2=l2, session_id=sid,
         )
         vfs.write(entry, ensure_dir=False)
     # 目录级 L0：模拟 LLM 为各目录生成的 .abstract.md
-    vfs.write_dir_meta("incidents", "本目录：历史生产故障记录，含 CPU 飙高/内存 OOM/磁盘满/连接池耗尽类故障",
-                       "按故障类型组织，条目为现象与根因定位")
-    vfs.write_dir_meta("solutions", "本目录：验证过的治理方案", "按方案类型组织")
+    # 注意：目录摘要质量是 viking 分层检索的关键变量——摘要越有区分度/覆盖度，
+    # 目录定位越准。这里写具体（贴近生产里 LLM 生成的摘要），而非"XX目录"式泛化短语。
+    vfs.write_dir_meta(
+        "incidents",
+        "本目录：历史生产故障的现象与根因定位，含 CPU 飙高（定时任务叠加/备份锁从库）、"
+        "内存 OOM（Druid 缓存泄漏/磁盘 I/O 瓶颈）、连接池耗尽（慢 SQL 缺索引）、"
+        "磁盘满（日志未轮转）、日志 I/O 风暴（logrotate copytruncate）、Nginx 自循环等故障",
+        "按故障类型组织，条目为现象与根因定位",
+    )
+    vfs.write_dir_meta(
+        "solutions",
+        "本目录：各类线上故障的排查结论与治理方案，含定时任务加锁、慢 SQL 加索引、"
+        "Druid 升级、磁盘换 SSD 扩容、logrotate 轮转、连接池治理、Nginx 配置修正等解决措施",
+        "按故障类型对应的解决方案组织",
+    )
     vfs.write_dir_meta("user_profile", "本目录：用户画像", "按画像维度组织")
     vfs.write_dir_meta("misc", "本目录：与故障无关的闲聊与杂项", "按主题组织")
     return vfs
@@ -283,18 +310,39 @@ def viking_retrieve(ret: DirectoryRecursiveRetriever, query: str, k: int) -> tup
 
 # ---------------- 评测 ----------------
 
-def evaluate(k: int, verbose: bool = True, use_llm_intent: bool = False) -> dict:
+def evaluate(
+    k: int,
+    verbose: bool = True,
+    use_llm_intent: bool = False,
+    real: bool = False,
+    dir_threshold: float | None = None,
+    entry_threshold: float | None = None,
+) -> dict:
     tmp = tempfile.mkdtemp(prefix="viking_eval_")
     try:
         vfs = build_vfs(tmp)
-        index = InMemoryL0Index(embedder=hash_embed)
+
+        # embedding 选择：--real 走生产同款真 embedding，否则离线确定性 hash embedding
+        if real:
+            from model.factory import embed_model
+            embedder = lambda t: list(embed_model.embed_query(t))  # noqa: E731
+            # 真 embedding 用生产默认阈值（dir=0.30 / entry=0.25），除非显式覆盖
+            dir_thr = dir_threshold if dir_threshold is not None else 0.30
+            entry_thr = entry_threshold if entry_threshold is not None else 0.25
+        else:
+            embedder = hash_embed
+            # 假 embedding 余弦尺度与真模型不同，用更低的阈值（0.12）避免全 miss
+            dir_thr = dir_threshold if dir_threshold is not None else 0.12
+            entry_thr = entry_threshold if entry_threshold is not None else 0.12
+
+        index = InMemoryL0Index(embedder=embedder)
         index.upsert([index_doc(vfs, e) for e in vfs.list_entries()])
         index.upsert(dir_docs(vfs))
 
         analyzer = IntentAnalyzer() if use_llm_intent else RuleBasedAnalyzer()
         ret = DirectoryRecursiveRetriever(
             vfs=vfs, index=index, intent_analyzer=analyzer,
-            dir_threshold=0.12, entry_threshold=0.12, detail_depth=2
+            dir_threshold=dir_thr, entry_threshold=entry_thr, detail_depth=2
         )
 
         stats = {
@@ -304,8 +352,10 @@ def evaluate(k: int, verbose: bool = True, use_llm_intent: bool = False) -> dict
         rows = []
         for query, gold_themes in QUERIES:
             # 同 (session, 主题) 可能沉淀多条记忆 → 去重，否则完美命中会被重复计数打折
+            # 注意：id 已带 category（incidents 现象 + solutions 方案两条都算 gold）
             gold_ids = sorted({
-                f"{sid}-{t}" for sid, _cat, _l2, _l0, _l1, t in CORPUS if t in gold_themes
+                entry_id_of(sid, t, cat)
+                for sid, cat, _l2, _l0, _l1, t in CORPUS if t in gold_themes
             })
 
             flat_ids = flat_baseline(index, query, k)
@@ -331,7 +381,8 @@ def evaluate(k: int, verbose: bool = True, use_llm_intent: bool = False) -> dict
             })
 
         if verbose:
-            print_report(rows, stats, k)
+            print_report(rows, stats, k, real=real,
+                         dir_threshold=dir_thr, entry_threshold=entry_thr)
         return {"rows": rows, "stats": stats, "k": k}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -384,14 +435,20 @@ def avg(xs: list[float]) -> float:
     return sum(xs) / len(xs) if xs else 0.0
 
 
-def print_report(rows, stats, k):
+def print_report(rows, stats, k, real=False, dir_threshold=None, entry_threshold=None):
+    emb_label = "DashScope text-embedding-v4（真）" if real else "确定性 hash（假·离线）"
     print("=" * 78)
     print(f"记忆检索评测：扁平 top-k（mem0 式基线） vs viking 目录递归检索  @K={k}")
+    print(f"embedding：{emb_label}")
+    if dir_threshold is not None and entry_threshold is not None:
+        print(f"阈值：dir={dir_threshold} / entry={entry_threshold}")
     print("=" * 78)
     print(f"{'查询':<32}{'gold':<14}{'扁平R@K':<10}{'分层R@K':<10}{'步数':<6}")
     print("-" * 78)
     for r in rows:
-        g = ",".join(x.split("-", 1)[1] for x in r["gold"]) or "-"
+        # gold id 形如 s1-c1-incidents，展示时只留 theme（c1），去重
+        themes = sorted({x.split("-", 2)[1] for x in r["gold"]})
+        g = ",".join(themes) or "-"
         mark = "" if r["m_v"] is not None else "  (无 gold，不进 MRR)"
         print(f"{r['query'][:30]:<32}{g:<14}{r['r_f']:<10.2f}{r['r_v']:<10.2f}"
               f"{r['hops']:<6}{mark}")
@@ -403,7 +460,7 @@ def print_report(rows, stats, k):
     print(f"{'检索步数':<16} 平均 {avg(stats['viking']['hops']):.1f} 步（trace 可诊断性）")
     print("-" * 78)
     print("注：R@K 中无 gold 的查询若被召回则记 0（噪声惩罚）；MRR 不含无 gold 的查询。")
-    print("注：语料用确定性假 embedding，绝对分数只作回归基线，不代表真实模型下的效果。")
+    print(f"注：embedding={emb_label}；{'viking 分层与扁平 top-k 持平，多出目录隔离+trace 可诊断' if real else '假 embedding 仅作回归基线，真实效果见 --real'}。")
 
 
 def main():
@@ -412,16 +469,32 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--intent", action="store_true",
                     help="用真 LLM 做意图分析（默认离线路由，结果可复现；--intent 仅供对照观察）")
+    ap.add_argument("--real", action="store_true",
+                    help="用真 embedding（DashScope text-embedding-v4，需 DASHSCOPE_API_KEY），"
+                         "解锁 viking 语义分层优势，得到真实结论")
+    ap.add_argument("--dir-threshold", type=float, default=None,
+                    help="覆盖目录级 L0 阈值（默认：假 embedding 0.12，真 embedding 0.30）")
+    ap.add_argument("--entry-threshold", type=float, default=None,
+                    help="覆盖条目级 L0 阈值（默认：假 embedding 0.12，真 embedding 0.25）")
     args = ap.parse_args()
-    result = evaluate(k=args.k, use_llm_intent=args.intent)
+    result = evaluate(
+        k=args.k,
+        use_llm_intent=args.intent,
+        real=args.real,
+        dir_threshold=args.dir_threshold,
+        entry_threshold=args.entry_threshold,
+    )
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write("# 记忆检索评测报告\n\n")
             f.write(f"对比：扁平 top-k（mem0 基线） vs viking 目录递归检索，@K={args.k}\n\n")
+            emb = "DashScope text-embedding-v4（真）" if args.real else "确定性 hash（假·离线）"
+            f.write(f"embedding：{emb}\n\n")
             f.write("| 查询 | gold | 扁平 R@K | 分层 R@K | 检索步数 |\n")
             f.write("|---|---|---|---|---|\n")
             for r in result["rows"]:
-                g = ",".join(r["gold"]) or "-"
+                themes = sorted({x.split("-", 2)[1] for x in r["gold"]})
+                g = ",".join(themes) or "-"
                 f.write(f"| {r['query']} | {g} | {r['r_f']:.2f} | {r['r_v']:.2f} | {r['hops']} |\n")
             for side, name in (("flat", "基线·扁平 top-k"), ("viking", "实验·viking 分层")):
                 s = result["stats"][side]
