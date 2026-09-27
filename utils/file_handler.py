@@ -24,7 +24,7 @@ def get_file_md5_hex(filepath: str):    # 获取文件的md5的十六进制字�
             md5_hex = md5_obj.hexdigest()
             return md5_hex
     except Exception as e:
-        logger.error(e)(f"计算文件{filepath}md5失败，{str(e)}")
+        logger.error(f"计算文件{filepath}的 md5 失败：{str(e)}")
         return None
 
 def listdir_with_allowed_type(path: str, allowed_types: tuple[str]):    # 返回文件夹内的文件列表（允许的文件后缀，递归子目录）

@@ -1,5 +1,3 @@
-external_data_path: data/external/records.csv
-
 # 滑动窗口短期记忆：每次喂给模型的历史消息条数上限（控制上下文长度，避免长对话 token 膨胀）
 memory_window: 20
 

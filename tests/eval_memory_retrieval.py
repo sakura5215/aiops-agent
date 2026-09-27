@@ -29,6 +29,20 @@
     - 语料用确定性假 embedding，绝对分数只作回归基线，不能当真实效果读；
       但语料内容提炼自公开真实故障复盘（非自造），检索命题与生产场景同分布。
 
+【重要 · 假 embedding 下 viking 会"看起来"退化，这是评测方法的固有边界，不是算法 bug】
+    hash embedding 只能度量"字符字面重叠"，度量不了语义相近。真实语料的 query 与 L0 摘要
+    字面差异大（如问"后端反复卡死三次"，条目 L0 是"后端卡死：慢 SQL 打满连接池"），
+    hash 相似度极低 → viking 在 Step 3 条目级定位被阈值过滤 → 召回失败。
+    而扁平 top-k 没有阈值这一道，反而"误打误撞"召回得更多。所以假 embedding 下
+    viking 的 Recall 反而低于扁平，这是**评测失真**，不是分层检索真不如扁平。
+
+    真实结论要等接入真 embedding（DashScope text-embedding-v4）再下：viking 的分层优势
+    恰恰依赖"语义相似度"才能把 query 正确引导到目录和条目。假 embedding 抹掉了语义，
+    等于把 viking 的核心能力（语义定位）关掉了，只剩它"多一道阈值"的劣势。这就是为什么
+    README 里写"绝对分数只作回归基线，不代表真实模型下的效果"。
+    本脚本的价值：① 验证检索链路/去重/trace 逻辑跑通；② 语料命题与生产同分布可复现；
+    ③ 暴露"用假 embedding 评语义检索"这个方法论陷阱本身。
+
 用法：
     python tests/eval_memory_retrieval.py                 # 跑评测并打印报告
     python tests/eval_memory_retrieval.py --k 5           # 指定召回条数
