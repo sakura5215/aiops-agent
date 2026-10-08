@@ -21,8 +21,9 @@
 - 压缩用「LLM 语义摘要」对齐 LangChain SummarizationMiddleware / Anthropic automatic
   compaction / Claude progressive summarisation（都用小模型摘要，而非拼接原文）。
 - 触发用「步数 OR token 阈值任一命中」对齐 LangChain trigger=[(...), (...)] 的任一触发语义。
-  注：token 计数走 get_num_tokens 的 GPT-2 fallback，对 Qwen 不是精确值，但作为
-  「上下文占用是否够长」的单调代理指标够用（这是诚实边界，不冒充精确预算）。
+  token 计数走 utils/token_counter.py，用 Qwen3 原生 tokenizer 精确计数（qwen3-max
+  与 Qwen3 开源系共享词表），不再用 GPT-2 近似值；仅在离线/未装依赖时回退并显式
+  标记 degraded（真实容错，非假装精确）。
 """
 from __future__ import annotations
 
@@ -47,6 +48,7 @@ from model.factory import chat_model
 from utils.prompt_loader import load_system_prompts, load_report_prompts
 from utils.config_handler import agent_conf
 from utils.logger_handler import logger
+from utils.token_counter import count_tokens
 
 # 工具注册：名字 -> 可调用对象。langchain @tool 装饰后的对象本身可调用（含 schema）。
 TOOL_FUNCTIONS: dict[str, Any] = {
@@ -101,22 +103,29 @@ def _execute_tool(name: str, args: dict) -> str:
         return f"ERROR: 工具 {name} 执行失败：{e}"
 
 
-def _summarize_tool_results(tool_texts: list[str], summarizer) -> str:
+def _summarize_tool_results(tool_texts: list[str], summarizer, retries: int = 1) -> str:
     """把一批工具结果用 LLM 摘要成一段（对齐 LangChain SummarizationMiddleware 的做法）。
 
     summarizer 是「接收文本、返回摘要文本」的可调用对象，默认走项目 chat_model，
-    测试时注入 mock 以离线可跑。
+    测试时注入 mock 以离线可跑。LLM 偶发超时/限流时重试一次，仍失败才降级为
+    原文拼接（保留信息优于丢弃，是真实容错而非静默失败）。
     """
     joined = "\n".join(f"- {t}" for t in tool_texts)
     prompt = (
         "请把以下多步工具查询/检索的结果提炼成要点摘要，保留关键数据、异常结论与"
         "排查线索，去掉重复和无关细节，控制在 300 字以内：\n" + joined
     )
-    try:
-        return summarizer(prompt)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"[react_loop]摘要失败，降级为原文拼接: {e}")
-        return "[已压缩的历史工具结果] 要点汇总：\n" + joined
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            return summarizer(prompt)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            logger.warning(
+                f"[react_loop]摘要失败（第 {attempt + 1}/{retries + 1} 次）: {e}"
+            )
+    logger.warning(f"[react_loop]摘要重试仍失败，降级为原文拼接: {last_err}")
+    return "[已压缩的历史工具结果] 要点汇总：\n" + joined
 
 
 def _compress_observations(
@@ -188,6 +197,8 @@ class ReActLoop:
         self.dedup_max_repeat = int(agent_conf.get("dedup_max_repeat", 2))
         # 摘要器：默认走 chat_model，测试可注入 mock
         self.summarizer = _default_summarizer()
+        # token 计数器：默认 Qwen3 精确计数，测试可注入确定性 mock（离线可跑）
+        self.token_counter = count_tokens
 
     def run(self, messages: list[BaseMessage]) -> tuple[str, LoopTrace]:
         """执行一次任务。输入 messages 已含 system + 历史 + 用户提问（调用方负责拼接）。
@@ -285,9 +296,9 @@ class ReActLoop:
     def _should_compress(self, step: int, messages: list[BaseMessage]) -> bool:
         """判断是否该触发压缩：步数阈值 OR token 阈值任一命中。
 
-        token 计数用 get_num_tokens（GPT-2 fallback），对 Qwen 非精确值，但作为
-        「上下文占用是否够长」的单调代理指标够用。仅累计非 system 消息的正文，
-        避免把固定提示词算进去导致误触发。
+        token 计数用 Qwen3 原生 tokenizer（utils/token_counter.py），对 qwen3-max
+        精确；仅离线/未装依赖时回退 GPT-2 并标记 degraded。仅累计非 system 消息的
+        正文，避免把固定提示词算进去导致误触发。
         """
         if step >= self.compress_after_steps:
             return True
@@ -297,10 +308,10 @@ class ReActLoop:
                 if isinstance(m, SystemMessage):
                     continue
                 content = m.content if isinstance(m.content, str) else str(m.content)
-                total += self.llm.get_num_tokens(content)
+                total += self.token_counter(content)
             return total >= self.compress_token_threshold
         except Exception as e:  # noqa: BLE001
-            logger.debug(f"[react_loop]token 计数不可用，退化为步数触发: {e}")
+            logger.debug(f"[react_loop]token 计数异常，退化为步数触发: {e}")
             return False
 
     def _compress_if_needed(self, messages: list[BaseMessage]) -> bool:

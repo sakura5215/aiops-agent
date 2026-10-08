@@ -82,7 +82,7 @@ messages ──调模型──▶ tool_calls? ──是──▶ 执行工具 �
 | **重复调用检测** | 同一工具 + 同一参数连续调 N 次，注入提示让模型换思路 | `dedup_max_repeat: 2` |
 | **上下文压缩** | 步数或 token 阈值任一命中时，把早期 tool observation 用 **LLM 语义摘要**（非字符串拼接）提炼成一段 | `compress_after_steps: 6` / `compress_token_threshold: 4000` |
 
-三项治理均有单测背书（`tests/test_react_loop.py`，12 断言，mock 模型离线可跑）。压缩对齐 LangChain `SummarizationMiddleware` / Anthropic automatic compaction 的做法——用 LLM 摘要而非拼接原文；token 计数走 `get_num_tokens` 的 GPT-2 fallback，对 Qwen 非精确值，只作「上下文占用是否够长」的代理指标（诚实边界）。双场景提示词与 9 工具与 `create_agent` 版共享同一套，信号工具 `fill_context_for_report` 在循环内直接切换报告提示词，语义不变。
+三项治理均有单测背书（`tests/test_react_loop.py`，12 断言，mock 模型离线可跑）。压缩对齐 LangChain `SummarizationMiddleware` / Anthropic automatic compaction 的做法——用 LLM 摘要而非拼接原文；token 计数走 `utils/token_counter.py`，加载 Qwen3 原生 tokenizer（vocab=151669，与 qwen3-max 共享词表）做**精确**计数，仅在离线/未装依赖时回退 GPT-2 并显式标记 degraded。双场景提示词与 9 工具与 `create_agent` 版共享同一套，信号工具 `fill_context_for_report` 在循环内直接切换报告提示词，语义不变。
 
 ## 四、两层记忆系统：短期对话上下文 + 跨会话事实
 

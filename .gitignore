@@ -31,6 +31,9 @@ agent/chat_histories/
 # 知识库去重记录
 md5.text
 
+# Qwen3 tokenizer 缓存（首次运行时自动下载，约 11MB，不入库）
+.cache/
+
 # 日志
 logs/
 *.log

@@ -62,10 +62,6 @@ class _FakeLLM:
             return self.script.pop(0)
         return _ai_final()
 
-    def get_num_tokens(self, text):
-        # 近似 token 计数：按字符数 / 2 粗估（仅测试用，触发 token 阈值）
-        return max(1, len(text) // 2)
-
 
 def _make_loop(llm_script, **kw):
     loop = ReActLoop()
@@ -76,6 +72,8 @@ def _make_loop(llm_script, **kw):
     loop.dedup_max_repeat = kw.get("dedup_max_repeat", 2)
     # 默认注入 mock 摘要器（离线可跑），返回带标记的摘要便于断言
     loop.summarizer = kw.get("summarizer", lambda text: "【摘要】" + text[:20])
+    # 默认注入确定性 token 计数器（离线可跑，不依赖 Qwen3 tokenizer 下载）
+    loop.token_counter = kw.get("token_counter", lambda text: max(1, len(text) // 2))
     return loop
 
 
