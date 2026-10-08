@@ -126,7 +126,7 @@ def _compress_observations(
 
     只动 role=tool 的消息；assistant 里的 tool_calls 结构（含 tool_call_id）要
     留着，不然消息对不上。做法：把这个区间所有 tool 内容交给 LLM 提炼成一段，
-    写进第一条 tool 消息，其余 tool 消息内容清成占位。这样既省 token，结论也没丢。
+    写进第一条 tool 消息，其余 tool 消息内容清成占位。
     """
     tool_texts = []
     for i in range(start, end):
