@@ -1,17 +1,10 @@
-"""token 计数，用 Qwen3 的 tokenizer 数，不拿 GPT-2 估。
+"""token 计数，用 Qwen3 的 tokenizer 数。
 
 项目 chat 模型是 qwen3-max，Qwen3 这一系（含 qwen3-max）共用同一套词表
 （vocab_size=151669），所以拿 Qwen3 开源权重导出的 tokenizer.json 就能对
 qwen3-max 的输入数出准数。
 
-实现上绕开了两个坑：
-1. 不用 transformers.AutoTokenizer——它加载前必须先读 config.json，hf-mirror
-   对这个文件偶尔返回空响应（0 字节），直接 OSError；import 它还会报 torch 缺失。
-2. 不用 huggingface_hub 下载——它会读系统代理，Clash 没开时下下来是 0 字节。
-   改成 urllib 直连 + 自己写盘，不碰代理。
-
 所以直接用底层的 tokenizers 库加载 tokenizer.json：
-- 从 hf-mirror 下载（约 11MB，就是完整词表），
 - 存到项目里 .cache/qwen3_tokenizer.json（已 gitignore），
 - 只加载一次，之后复用。
 
