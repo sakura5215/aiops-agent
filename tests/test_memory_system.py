@@ -1,15 +1,6 @@
 """
 AIOps 记忆系统测试
 ==================
-
-分三类：
-  [REAL]  真实跑：滑动窗口、会话隔离、记忆 JSON 持久化 round-trip
-  [MOCK]  mock LLM/Milvus 后测真实解析与合并逻辑：
-            mem0 事实抽取的解析、ADD/UPDATE/MERGE/DELETE 决策解析、
-            _apply 合并逻辑、VectorStore provider 路由
-  [SKIP]  本脚本不测：Milvus 真实连接、LLM 真实调用（这两项在
-          test_delivery_smoke.py 的 S3 里真实跑）；viking 见 test_viking.py
-
 运行：.venv/Scripts/python.exe tests/test_memory_system.py
 """
 import sys
