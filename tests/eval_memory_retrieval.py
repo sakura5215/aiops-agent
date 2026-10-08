@@ -1,10 +1,7 @@
 """
 记忆检索评测。
 
-为什么要有这个脚本：
-    记忆系统的关键指标不是"能不能存进去"，而是"该 recall 的时候 recall 不 recall得回来"。
-    viking 相对 mem0 的一个好处是"召回失败可诊断"（trace 可视化），而诊断的前提是
-    先把指标量化。本脚本用从公开真实生产故障复盘提炼的语料离线跑评测，不需要 API key。
+本脚本用从公开真实生产故障复盘提炼的语料离线跑评测，评测recall。
 
 语料构造参考 LoCoMo / LongMemEval 的思路：
     - 多会话（session）× 多轮对话，且刻意混入大量闲聊与不相关话题（噪声）
@@ -28,27 +25,10 @@
       不进 MRR 均值 —— 没有 relevant doc 时 MRR 无定义，硬算 0 会拉低所有基线。
     - 默认离线假 embedding 只作回归基线；要读"真实效果"必须 --real（真 embedding），
       两者都跑同一套语料，语料提炼自公开真实故障复盘（非自造），命题与生产同分布。
-
-viking 早期评测 Recall 偏低的排查记录（两轮排查后的结论）：
-    早期版本 viking 在评测里 Recall 一度低至 0.45，远低于扁平 top-k。逐层诊断后确认
-    不是算法 bug，而是两个语料构造问题：
-    1. entry_id 冲突：同一 (session, theme) 在 incidents（现象/根因）与 solutions（治理方案）
-       两个目录各沉淀一条，但早期 entry_id 只到 theme 粒度（如 s1-c1），导致 entries_index
-       互相覆盖、list_entries 丢失 incidents 目录全部 9 条记忆（索引里每个案例只剩 solutions 一条）。
-    2. 目录摘要泛化：solutions 目录摘要早期只写"本目录：验证过的治理方案"，与"怎么治理"类
-       query 语义相似度仅 0.27~0.38，目录定位锁不住 solutions，gold 少一半。
-    修复后（entry_id 带 category + 目录摘要写具体）：
-    - 真 embedding（--real）：viking Recall@3 = 0.900，与扁平 top-k 完全持平，MRR 均 0.974。
-    - 假 embedding（离线）：viking 0.750 反而略高于扁平 0.725。
-    结论：viking 分层检索在真 embedding + 优质目录摘要下，召回与排序质量追平扁平 top-k，
+      
+    viking 分层检索在真 embedding + 优质目录摘要下，召回与排序质量追平扁平 top-k，
     同时多出"目录隔离 + trace 可诊断 + 可扩展"三项扁平没有的能力。目录摘要质量是 viking
     效果的关键变量（生产里由 LLM 生成，评测里须写得足够有区分度）。
-
-用法：
-    python tests/eval_memory_retrieval.py                 # 离线跑（确定性假 embedding，无需 key）
-    python tests/eval_memory_retrieval.py --k 5           # 指定召回条数
-    python tests/eval_memory_retrieval.py --out report.md # 额外写出报告文件
-    python tests/eval_memory_retrieval.py --real          # 用真 embedding（DashScope text-embedding-v4，需 key）
 
 embedding 选择（--real 开关）：
     - 默认离线：确定性 hash embedding，零依赖、结果可复现，只度量字符字面重叠，
@@ -93,7 +73,7 @@ def hash_embed(text, dim=128):
 
 
 # ---------------- 真实语料（提炼自公开生产故障复盘） ----------------
-# 语料不再自造，而是从公开真实生产故障复盘文章提炼，每条记忆标注出处，
+# 语料是从公开真实生产故障复盘文章提炼，每条记忆标注出处，
 # 覆盖 CPU 飙高 / 内存 OOM / 磁盘满 / 连接池耗尽 / 慢 SQL 五类高发故障。
 # 出处：阿里云开发者社区、达梦社区、BestHub、椰云网络、网硕互联、精创网络、北冥有鱼 等公开技术复盘。
 # theme 用 c1~c9 唯一标识一个具体故障案例（每个案例 = 1 条 incident + 1 条 solution），
