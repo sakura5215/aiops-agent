@@ -1,14 +1,13 @@
-"""自研 Agent Loop 治理逻辑单测（mock 模型，不依赖 API key）
+"""自研 Agent Loop 治理逻辑单测
 
-覆盖四个治理点 + 兜底：
-  [MOCK] 步数上限（max_steps 强制终止）
-  [MOCK] 重复调用检测（同一工具+参数连续调用注入提示）
-  [MOCK] 上下文压缩（LLM 摘要早期 tool observation，非字符串拼接）
+  [MOCK] 步数上限
+  [MOCK] 重复调用检测
+  [MOCK] 上下文压缩
   [MOCK] token 阈值触发压缩
   [MOCK] 报告信号切换（fill_context_for_report 触发 report_mode）
   [MOCK] 幻觉工具 / 未知工具兜底
 
-通过注入 fake llm（mock 掉 bind_tools 后的 invoke）和 mock 摘要器来驱动循环分支，不触网。
+通过注入 fake llm（mock 掉 bind_tools 后的 invoke）和 mock 摘要器来驱动循环分支。
 
 运行：.venv/Scripts/python.exe tests/test_react_loop.py
 """
