@@ -1,6 +1,6 @@
 # OpsPilot · 企业 AIOps 智能运维问答系统
 
-基于 LangGraph StateGraph 编排的 ReAct Agent，面向运维场景提供告警分析、监控指标诊断、日志根因定位与系统运行报告生成。系统使用通义千问 Qwen 作为核心模型，通过 LangChain 1.x 的 `create_agent` + middleware 机制组装工具调用闭环。
+基于 LangGraph StateGraph 编排的 ReAct Agent，面向运维场景提供告警分析、监控指标诊断、日志根因定位与系统运行报告生成。系统使用通义千问 Qwen 作为核心模型，推理循环**自研裸写**（`agent/react_loop.py`，含步数上限 / 重复调用检测 / 上下文压缩三项治理），同时保留 LangChain 1.x `create_agent` + middleware 版作为可切换的对照实现。
 
 ## 核心设计
 
@@ -66,6 +66,23 @@ flowchart TD
 | `fill_context_for_report` | 信号工具，触发报告场景 |
 
 数据工具当前对接 mock 数据（`agent_tools.py` 内置），接口已抽象，后续可替换为真实 Prometheus / Elasticsearch / 告警平台数据源。
+
+## 三.5、自研 Agent Loop（`agent/react_loop.py`）
+
+`create_agent` 把推理循环藏在框架内部，为把「循环本体、终止条件、上下文治理」摊开讲清楚，裸写了 ReAct 循环并补齐三项治理。`config/agent.yml` 的 `custom_loop_enabled` 可一键切回 `create_agent` 版对照。
+
+```text
+messages ──调模型──▶ tool_calls? ──是──▶ 执行工具 ──ToolMessage 回填──▶ 回到顶部
+                        └─否──▶ 最终回答，结束
+```
+
+| 治理点 | 手段 | 配置 |
+|---|---|---|
+| **步数上限** | 超过 `max_steps` 强制终止，防止模型在死循环里打转 | `loop_max_steps: 8` |
+| **重复调用检测** | 同一工具 + 同一参数连续调 N 次，注入提示让模型换思路 | `dedup_max_repeat: 2` |
+| **上下文压缩** | 超过 `compress_after_steps` 步时，把早期 tool observation 摘要成一段 | `compress_after_steps: 6` |
+
+三项治理均有单测背书（`tests/test_react_loop.py`，9 断言，mock 模型离线可跑）。双场景提示词与 9 工具与 `create_agent` 版共享同一套，信号工具 `fill_context_for_report` 在循环内直接切换报告提示词，语义不变。
 
 ## 四、两层记忆系统：短期对话上下文 + 跨会话事实
 
@@ -229,6 +246,7 @@ tail -f logs/agent_260924.log | grep -E "\[viking\]|\[retrieval\]"
 ├── app.py                    # Streamlit 前端，会话管理与流式输出
 ├── agent/
 │   ├── react_agent.py        # ReAct Agent 编排：滑动窗口 + 记忆注入 + 事实写入
+│   ├── react_loop.py         # 自研 ReAct Loop：步数上限 / 重复检测 / 上下文压缩
 │   ├── memory.py             # 短期记忆：FileChatMessageHistory + 滑动窗口
 │   ├── memory_store.py       # 长期记忆：mem0 式两阶段流水线（增量 upsert）
 │   ├── viking/               # viking 分层记忆
@@ -312,4 +330,4 @@ python tests/eval_memory_retrieval.py --intent     # 对照：用真 LLM 做意�
 
 ## 技术栈
 
-Python · LangChain 1.x（`create_agent` + middleware 机制）· LangGraph StateGraph · 通义千问 Qwen · Milvus Lite / Chroma · Streamlit
+Python · LangChain 1.x（自研 ReAct Loop + `create_agent`/middleware 对照）· LangGraph StateGraph · 通义千问 Qwen · Milvus Lite / Chroma · Streamlit

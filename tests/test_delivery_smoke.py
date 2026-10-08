@@ -232,7 +232,7 @@ def test_connectivity():
 
 def test_regression_gate():
     section("S4 单元测试回归门禁")
-    for script in ("tests/test_viking.py", "tests/test_memory_system.py"):
+    for script in ("tests/test_viking.py", "tests/test_memory_system.py", "tests/test_react_loop.py"):
         r = subprocess.run([sys.executable, script], cwd=ROOT, capture_output=True, text=True)
         tail = [line for line in r.stdout.strip().splitlines() if "总计" in line or "结果" in line]
         check(f"{os.path.basename(script)} 全绿",

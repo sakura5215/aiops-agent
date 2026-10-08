@@ -12,3 +12,13 @@ viking_enabled: true
 viking_dir_threshold: 0.30
 # 条目级 L0 阈值：目录内扫条目摘要时，余弦相似度低于该值视为不相关
 viking_entry_threshold: 0.25
+
+# ===== 自研 Agent Loop 治理参数 =====
+# 推理步数上限：超过后强制终止，防止模型在死循环里打转
+loop_max_steps: 8
+# 上下文压缩触发步数：达到该步数后，把早期 tool observation 摘要成一段
+compress_after_steps: 6
+# 重复调用检测：同一工具+同一参数连续调用该次数后，注入提示让模型换思路
+dedup_max_repeat: 2
+# 是否启用自研 Loop（false 时回退 create_agent）
+custom_loop_enabled: true

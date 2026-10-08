@@ -4,7 +4,16 @@ from langchain_core.tools import tool
 from rag.rag_service import RagSummarizeService
 from utils.logger_handler import logger
 
-rag = RagSummarizeService()
+# 惰性初始化 RAG 服务：避免 import 本模块时立即连接向量库（Milvus Lite 文件锁、
+# 无 key 场景等）。首次调用 rag_summarize 时才真正建连接，测试 / 离线场景更稳。
+_rag = None
+
+
+def _get_rag():
+    global _rag
+    if _rag is None:
+        _rag = RagSummarizeService()
+    return _rag
 
 # 注：工具数据为内置 mock（演示用），接口已抽象，后续可替换为真实 Prometheus / ES / 告警平台数据源
 service_list = [
@@ -300,7 +309,7 @@ mock_topology_data = {
 # RAG 工具：保留
 @tool(description="向向量存储中检索参考资料")
 def rag_summarize(query: str) -> str:
-    return rag.rag_summarize(query)
+    return _get_rag().rag_summarize(query)
 
 
 # 基础上下文工具

@@ -14,22 +14,31 @@ from agent.tools.middleware import monitor_tool, log_before_model, report_prompt
 
 class ReactAgent:
     def __init__(self):
-        self.agent = create_agent(
-            model=chat_model,
-            system_prompt=load_system_prompts(),
-            tools=[
-                rag_summarize,
-                get_target_service,
-                get_time_range,
-                fetch_alert_data,
-                fetch_metric_data,
-                fetch_log_summary,
-                fetch_service_topology,
-                fetch_report_data,
-                fill_context_for_report,
-            ],
-            middleware=[monitor_tool, log_before_model, report_prompt_switch],
-        )
+        # 自研 Loop 开关：开启走裸写的 ReAct 循环（agent/react_loop.py），
+        # 关闭回退 create_agent 中间件版。两者共享同一套 9 工具 + 双场景提示词。
+        self._custom_loop = None
+        if agent_conf.get("custom_loop_enabled", True):
+            from agent.react_loop import ReActLoop
+            self._custom_loop = ReActLoop()
+            logger.info("[ReactAgent]自研 ReAct Loop 已启用（步数上限/重复调用检测/上下文压缩）")
+        else:
+            self.agent = create_agent(
+                model=chat_model,
+                system_prompt=load_system_prompts(),
+                tools=[
+                    rag_summarize,
+                    get_target_service,
+                    get_time_range,
+                    fetch_alert_data,
+                    fetch_metric_data,
+                    fetch_log_summary,
+                    fetch_service_topology,
+                    fetch_report_data,
+                    fill_context_for_report,
+                ],
+                middleware=[monitor_tool, log_before_model, report_prompt_switch],
+            )
+            logger.info("[ReactAgent]create_agent 中间件版已启用")
         # 长期记忆：优先 viking 分层记忆（mem0 治理 + viking 分层组织与检索），
         # 可用 config/agent.yml 的 viking_enabled 关掉回退到 mem0 扁平版，
         # 两者都初始化失败时降级关闭，不阻断 agent 启动
@@ -105,6 +114,7 @@ class ReactAgent:
         # 该属性在切 viking 时已被删掉，异常被 except 吞掉只留一条 warning，
         # 结果长期记忆"一直在跑但永远召回为空"——静默失败，比直接报错更危险
         store = self.viking or self.mem0_store
+        memory_context = None
         if agent_conf.get("long_term_memory_enabled", True) and store:
             try:
                 if self.viking:
@@ -116,17 +126,31 @@ class ReactAgent:
                 if recalled:
                     memory_context = "以下是与本次提问相关的长期记忆事实，供参考：\n" + \
                         "\n".join(f"- {f}" for f in recalled)
-                    full_messages = [SystemMessage(content=memory_context)] + full_messages
             except Exception as e:
                 logger.warning(f"[ReactAgent]长期记忆检索失败，跳过: {e}")
 
-        # 非流式调用，先拿完整结果
-        result = self.agent.invoke(
-            {"messages": full_messages},
-            context={"report": False},
-        )
-
-        ai_message = self._get_ai_message(result)
+        # 自研 Loop：拼接 system（场景提示词 + 长期记忆）后交给裸循环执行
+        if self._custom_loop is not None:
+            system_prompt = load_system_prompts()
+            messages = [SystemMessage(content=system_prompt)]
+            if memory_context:
+                messages.append(SystemMessage(content=memory_context))
+            messages.extend(full_messages)
+            final_text, trace = self._custom_loop.run(messages)
+            logger.info(f"[ReactAgent]loop trace: {trace.summary()}")
+            # 自研 loop 的最终文本作为 AIMessage 落历史
+            ai_message = AIMessage(content=final_text)
+        else:
+            # create_agent 版：长期记忆以 SystemMessage 前置注入
+            if memory_context:
+                full_messages = [SystemMessage(content=memory_context)] + full_messages
+            # 非流式调用，先拿完整结果
+            result = self.agent.invoke(
+                {"messages": full_messages},
+                context={"report": False},
+            )
+            ai_message = self._get_ai_message(result)
+            final_text = self._extract_text(result)
         if ai_message:
             history.add_message(ai_message)     # 会自动序列化写入文件
             # 长期记忆写入：从本轮交流抽取原子事实去重入库
@@ -138,8 +162,6 @@ class ReactAgent:
                         self.mem0_store.add([user_msg, ai_message], user_id=str(session_id))
                 except Exception as e:
                     logger.warning(f"[ReactAgent]长期记忆写入失败，跳过: {e}")
-
-        final_text = self._extract_text(result)
 
         # 伪流式：按固定长度切块输出
         chunk_size = 20
