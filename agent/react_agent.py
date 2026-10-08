@@ -112,7 +112,6 @@ class ReactAgent:
         # 长期记忆检索：按当前 query 召回相关事实，作为上下文注入
         # 注意：这里必须走 viking / mem0 两条真实分支。曾经写成 self.memory_store，
         # 该属性在切 viking 时已被删掉，异常被 except 吞掉只留一条 warning，
-        # 结果长期记忆"一直在跑但永远召回为空"——静默失败，比直接报错更危险
         store = self.viking or self.mem0_store
         memory_context = None
         if agent_conf.get("long_term_memory_enabled", True) and store:
