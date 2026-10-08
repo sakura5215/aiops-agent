@@ -1,7 +1,6 @@
 """viking Directory Recursive Retrieval：目录递归检索算法。
 
-对应方案文档 §4.2 五步与 §4.3 关键设计点。这里把算法完整实现一遍：
-
+整体五步：
   1. Intent Analysis   拆成 0-5 个 TypedQuery（只有 search() 做）
   2. Initial Positioning  query embedding → 扫所有**目录级 L0**（.abstract.md）向量
                          → 阈值过滤，定位多个高分目录
@@ -9,15 +8,15 @@
   4. Recursive Drill-down 高分条目下钻 L1 概览（默认终点），不够时再下钻 L2
   5. Result Aggregation  按分数与 TypedQuery 优先级聚合，返回最相关的 L1/L2
 
-关键纠正（方案文档 §4.2 明确）：路径不是检索入口，**L0 向量才是入口**；
-路径是 L0 命中后告诉你要去哪下钻的导航信息。所以本文件的检索顺序是
-"先扫目录级 L0 → 再进目录扫条目级 L0 → 再下钻"，而不是"先猜路径再扫该路径"。
+一个关键点：路径不是检索入口，**L0 向量才是入口**；路径是 L0 命中后告诉你
+去哪下钻的导航信息。所以顺序是"先扫目录级 L0 → 再进目录扫条目级 L0 → 再下钻"，
+而不是"先猜路径再扫该路径"。
 
-L0 阶段是**阈值过滤而非只取 top-1**：多个目录可能同时相关
+L0 阶段是**阈值过滤而不是只取 top-1**：多个目录可能同时相关
 （问"磁盘满怎么解决"可能同时命中 incidents 和 solutions）。
 
-全程留 retrieval trace（方案文档 §4.4：viking 强调检索轨迹可视化，
-让召回失败可诊断 —— mem0 扁平 top-k 的失败是隐式的，viking 的失败是可观测的）。
+全程留 retrieval trace，召回失败时能顺着 trace 看是哪一步漏的
+（mem0 扁平 top-k 召回失败是隐式的，这里失败是可观测的）。
 """
 from __future__ import annotations
 
@@ -49,7 +48,7 @@ class TraceStep:
 
 @dataclass
 class RetrievalTrace:
-    """检索轨迹：viking 强调 retrieval trace visualization，让召回失败可回溯。"""
+    """检索轨迹：记录每一步做了什么，召回失败时可以顺着查。"""
 
     steps: list[TraceStep] = field(default_factory=list)
 

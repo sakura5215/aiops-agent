@@ -1,12 +1,10 @@
 """viking 长期记忆库：mem0 管"数据进入的治理"，viking 管"数据组织 + 分层取"。
 
-对应方案文档 §2、§3、§5 与附录 A 的写路径：
-
 写路径（commit）：
   1. LLM 从对话流抽取原子事实（mem0 的 fact extraction）
-  2. hash 硬去重：完全相同的事实直接丢弃（降写路径 LLM 调用成本）
+  2. hash 硬去重：完全相同的事实直接丢弃（省写路径 LLM 调用成本）
   3. LLM 分类路由：判断属于哪个子目录（viking 内置分类 + 运维场景扩展）
-  4. **限定在该目录内**算相似度（分类在前、相似度比较限定同目录，方案文档 §5.1）
+  4. **限定在该目录内**算相似度（先分类，相似度只跟同目录的比）
        > 0.92 → 丢弃（重复）
        > 0.85 → LLM 合并：原位更新 L2 + 重生成条目级 L0/L1；分类变了则迁移目录
   5. 同步生成条目级 L0 摘要 / L1 概览（L2 就是原始事实原文）
@@ -14,8 +12,8 @@
 
 读路径见 directory_retrieval.DirectoryRecursiveRetriever。
 
-与 mem0 原生的差异（面试要讲清）：mem0 的 write-path 是 LLM routing 决策
-ADD/UPDATE/MERGE/DELETE/NOOP，这里用 hash + 双阈值简化，是为了降低写路径成本。
+跟 mem0 原生的区别：mem0 写路径是 LLM routing 决策 ADD/UPDATE/MERGE/DELETE/NOOP，
+这里用 hash + 双阈值简化，主要是为了省写路径的 LLM 调用成本。
 """
 from __future__ import annotations
 
@@ -48,7 +46,7 @@ from agent.viking.viking_fs import (
 from model.factory import chat_model
 from utils.logger_handler import logger
 
-# 双阈值（方案文档 §2.2/§2.3，工程简化版）
+# 双阈值：用来判断写路径里是丢弃、合并还是新增
 DEDUP_THRESHOLD = 0.92   # 超过此相似度视为重复，丢弃
 MERGE_THRESHOLD = 0.85   # 超过此相似度触发 LLM 合并
 
@@ -211,7 +209,7 @@ class VikingMemoryStore:
         return facts
 
     def _route_category(self, fact: str) -> str:
-        """分类路由（方案文档 §2.4）：基于 viking 内置分类 + 运维场景扩展。"""
+        """分类路由：基于 viking 内置分类 + 运维场景扩展。"""
         try:
             content = self._llm_text(
                 CATEGORY_PROMPT.format(categories="\n".join(
@@ -233,7 +231,7 @@ class VikingMemoryStore:
         return DEFAULT_CATEGORY
 
     def _generate_layers(self, fact: str) -> tuple[str, str]:
-        """生成条目级 L0/L1（方案文档 §3.2：L2 不需要生成，它就是原文）。"""
+        """生成条目级 L0/L1（L2 不用生成，它就是原文）。"""
         try:
             content = self._llm_text(
                 LAYER_PROMPT.format(fact=fact, l0_max=L0_MAX, l1_max=L1_MAX))
@@ -284,7 +282,7 @@ class VikingMemoryStore:
             session_id=session_id,
         )
 
-        # 同目录内相似度比较（方案文档 §5.1：分类在前，相似度比较限定同目录）
+        # 同目录内算相似度（先分类，相似度只跟同目录的比）
         similar = self._search_in_category(fact, category, k=1)
         if similar:
             sim_entry, score = similar[0]
@@ -294,7 +292,7 @@ class VikingMemoryStore:
             if score >= MERGE_THRESHOLD:
                 merged = self._merge_facts(sim_entry.l2 or sim_entry.l1, fact)
                 new_l0, new_l1 = self._generate_layers(merged)
-                # 合并后可能语义变了 → 重新分类（edge case，方案文档 §5.1 Step 5）
+                # 合并后语义可能变了 → 重新分类一次
                 new_cat = self._route_category(merged)
                 updated = self.vfs.update_entry(
                     sim_entry.entry_id, l0=new_l0, l1=new_l1, l2=merged, category=new_cat
@@ -327,7 +325,7 @@ class VikingMemoryStore:
 
     def commit_resource(self, doc_id: str, summary: str, content: str,
                         category: str = "resources") -> MemoryEntry:
-        """把知识库文档作为 RESOURCE 存入 viking（方案文档 §4.9：viking 统一三类检索源）。"""
+        """把知识库文档作为 RESOURCE 存入 viking。"""
         self.vfs.ensure_category(category)
         entry = MemoryEntry(
             entry_id=doc_id,
@@ -342,7 +340,7 @@ class VikingMemoryStore:
 
     def commit_skill(self, skill_id: str, name: str, usage: str,
                      category: str = "skills") -> MemoryEntry:
-        """把工具调用经验作为 SKILL 存入 viking（方案文档 §4.9）。"""
+        """把工具调用经验作为 SKILL 存入 viking。"""
         return self.commit_resource(skill_id, name, usage, category)
 
     # ---------- 同目录相似度 ----------
@@ -393,7 +391,7 @@ class VikingMemoryStore:
         return self.retriever.sync_index()
 
     def _dir_summary_generator(self):
-        """目录级 L0/L1 的生成器：基于目录内真实条目归纳（方案文档 §3.4，惰性刷新）。"""
+        """目录级 L0/L1 生成器：根据目录里的真实条目归纳，惰性刷新。"""
         def gen(entries: list[MemoryEntry]) -> tuple[str, str]:
             if not entries:
                 return "（暂无条目）", ""

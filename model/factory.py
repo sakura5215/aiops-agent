@@ -14,7 +14,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_dotenv() -> None:
-    """加载项目根目录的 .env；未安装 python-dotenv 时静默跳过，退化为只用环境变量。"""
+    """加载项目根目录的 .env；没装 python-dotenv 就跳过，只用环境变量。"""
     try:
         from dotenv import load_dotenv
     except ImportError:

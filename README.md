@@ -69,7 +69,7 @@ flowchart TD
 
 ## 三.5、自研 Agent Loop（`agent/react_loop.py`）
 
-`create_agent` 把推理循环藏在框架内部，为把「循环本体、终止条件、上下文治理」摊开讲清楚，裸写了 ReAct 循环并补齐三项治理。`config/agent.yml` 的 `custom_loop_enabled` 可一键切回 `create_agent` 版对照。
+`create_agent` 把推理循环包在框架里，很多细节看不到也改不了，所以自己写一遍 ReAct 循环，顺带处理三个实际问题。`config/agent.yml` 的 `custom_loop_enabled` 可以切回 `create_agent` 版对照。
 
 ```text
 messages ──调模型──▶ tool_calls? ──是──▶ 执行工具 ──ToolMessage 回填──▶ 回到顶部
@@ -82,7 +82,7 @@ messages ──调模型──▶ tool_calls? ──是──▶ 执行工具 �
 | **重复调用检测** | 同一工具 + 同一参数连续调 N 次，注入提示让模型换思路 | `dedup_max_repeat: 2` |
 | **上下文压缩** | 步数或 token 阈值任一命中时，把早期 tool observation 用 **LLM 语义摘要**（非字符串拼接）提炼成一段 | `compress_after_steps: 6` / `compress_token_threshold: 4000` |
 
-三项治理均有单测背书（`tests/test_react_loop.py`，12 断言，mock 模型离线可跑）。压缩对齐 LangChain `SummarizationMiddleware` / Anthropic automatic compaction 的做法——用 LLM 摘要而非拼接原文；token 计数走 `utils/token_counter.py`，加载 Qwen3 原生 tokenizer（vocab=151669，与 qwen3-max 共享词表）做**精确**计数，仅在离线/未装依赖时回退 GPT-2 并显式标记 degraded。双场景提示词与 9 工具与 `create_agent` 版共享同一套，信号工具 `fill_context_for_report` 在循环内直接切换报告提示词，语义不变。
+三项治理都有单测（`tests/test_react_loop.py`，12 断言，mock 模型离线可跑）。压缩用 LLM 摘要而不是拼接原文（类似 LangChain `SummarizationMiddleware` 的做法）；token 计数走 `utils/token_counter.py`，加载 Qwen3 原生 tokenizer（vocab=151669，与 qwen3-max 共享词表）做精确计数，只在没网/没装依赖时退回 GPT-2 估数并记日志。双场景提示词与 9 工具跟 `create_agent` 版共用，信号工具 `fill_context_for_report` 在循环内直接切报告提示词，语义不变。
 
 ## 四、两层记忆系统：短期对话上下文 + 跨会话事实
 

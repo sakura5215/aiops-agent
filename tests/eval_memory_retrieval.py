@@ -1,12 +1,12 @@
 """
-记忆检索评测（Roadmap：引入 LoCoMo / LongMemEval 思路）。
+记忆检索评测。
 
 为什么要有这个脚本：
-    记忆系统的核心指标不是"能不能存进去"，而是"该 recall 的时候 recall 不 recall得回来"。
-    viking 相对 mem0 的核心卖点之一是"召回失败可诊断"（trace 可视化），而诊断的前提是
+    记忆系统的关键指标不是"能不能存进去"，而是"该 recall 的时候 recall 不 recall得回来"。
+    viking 相对 mem0 的一个好处是"召回失败可诊断"（trace 可视化），而诊断的前提是
     先把指标量化。本脚本用从公开真实生产故障复盘提炼的语料离线跑评测，不需要 API key。
 
-语料构造参考 LoCoMo / LongMemEval 的关键思路：
+语料构造参考 LoCoMo / LongMemEval 的思路：
     - 多会话（session）× 多轮对话，且刻意混入大量闲聊与不相关话题（噪声）
     - gold 问答对：问"某次故障怎么解决的"，gold 是当初沉淀的那条记忆
     - 干扰项：语义相近但不同的故障（防止靠关键词蒙对）
@@ -21,15 +21,15 @@
     - MRR           第一个 gold 出现位置的倒数排名
     - 检索步数      分层检索的路径长度（trace 步数，可诊断性间接指标）
 
-口径说明（避免自欺）：
-    - gold 按 (session, 主题) 去重。同一主题可能沉淀多条记忆，不去重会让"完美命中"
-      只按重复计数打折，指标凭空少一半。
+统计口径：
+    - gold 按 (session, 主题) 去重。同一主题可能沉淀多条记忆，不去重的话"完美命中"
+      会被重复计数打折，指标凭空少一半。
     - 无 gold 的闲聊查询（期望"什么都不召回"）只计入 Recall/Precision 的噪声惩罚，
       不进 MRR 均值 —— 没有 relevant doc 时 MRR 无定义，硬算 0 会拉低所有基线。
     - 默认离线假 embedding 只作回归基线；要读"真实效果"必须 --real（真 embedding），
       两者都跑同一套语料，语料提炼自公开真实故障复盘（非自造），命题与生产同分布。
 
-【重要 · 两轮排查后 viking "看起来退化"的真正根因】
+viking 早期评测 Recall 偏低的排查记录（两轮排查后的结论）：
     早期版本 viking 在评测里 Recall 一度低至 0.45，远低于扁平 top-k。逐层诊断后确认
     不是算法 bug，而是两个语料构造问题：
     1. entry_id 冲突：同一 (session, theme) 在 incidents（现象/根因）与 solutions（治理方案）
@@ -471,7 +471,7 @@ def main():
                     help="用真 LLM 做意图分析（默认离线路由，结果可复现；--intent 仅供对照观察）")
     ap.add_argument("--real", action="store_true",
                     help="用真 embedding（DashScope text-embedding-v4，需 DASHSCOPE_API_KEY），"
-                         "解锁 viking 语义分层优势，得到真实结论")
+                         "语义相似度真实，结论以这组为准")
     ap.add_argument("--dir-threshold", type=float, default=None,
                     help="覆盖目录级 L0 阈值（默认：假 embedding 0.12，真 embedding 0.30）")
     ap.add_argument("--entry-threshold", type=float, default=None,

@@ -1,15 +1,12 @@
 """
 viking 虚拟文件系统：把记忆条目按 viking 的目录模型组织起来。
 
-对应方案文档 §3.1 ~ §3.4：
-
 - 路径结构根固定为 `memories/`，子目录在 viking 内置记忆类型分类
   （profile / preferences / events / experiences / skills ...）基础上按运维场景扩展。
 - 条目级三层：L0 一句话摘要（<=256 字符，进向量索引做定位）、
   L1 概览（<=4000 字符，默认下钻终点）、L2 完整原文。
 - 目录级两层：`.abstract.md`（目录级 L0，描述该目录存什么）+ `.overview.md`（目录级 L1）。
-- 目录级摘要的更新时机采用"写入时打 dirty 标记 + 检索时惰性刷新 + 定时兜底"，
-  这是基于写路径成本的工程推断，不是 viking 既定机制（方案文档 §3.4 已标注）。
+- 目录级摘要的更新时机是"写入时打 dirty 标记 + 检索时惰性刷新 + 定时兜底"。
 
 持久化：本地目录 + index.json 模拟虚拟文件系统。每个条目一个 JSON 文件，
 目录级摘要是两个 .md 文件，dirty 集合落在 index.json 的 `_dirty` 字段。
@@ -41,7 +38,7 @@ CATEGORIES: dict[str, str] = {
 }
 DEFAULT_CATEGORY = "misc"
 
-# 目录级摘要文件（viking 文档明确：每个目录有自己的 abstract / overview）
+# 目录级摘要文件：每个目录一份 abstract（L0）和 overview（L1）
 ABSTRACT_FILE = ".abstract.md"
 OVERVIEW_FILE = ".overview.md"
 
@@ -118,8 +115,8 @@ class VikingFS:
     def ensure_category(self, category: str, seed: bool = True) -> str:
         """确保目录存在。seed=True 时若目录尚无摘要，写入一条"空目录摘要"。
 
-        viking 文档只说写入时自动处理三层，没说空目录怎么办。这里取通用工程实践：
-        目录刚建好时用目录名和设计意图生成初始摘要，等有真实条目进来后再刷新。
+        空目录没有条目可以归纳，这里先用目录名和设计意图生成初始摘要，
+        等有真实条目进来后再刷新。
         """
         d = self._category_dir(category)
         os.makedirs(d, exist_ok=True)
@@ -177,7 +174,7 @@ class VikingFS:
         l2: Optional[str] = None,
         category: Optional[str] = None,
     ) -> Optional[MemoryEntry]:
-        """原位更新条目内容，并给目录打 dirty 标记（方案文档 §5.2 合并路径）。
+        """原位更新条目内容，并给目录打 dirty 标记。
 
         l0 为空字符串表示"重生成摘要"，传 None 表示"不动这一层"。
         """
@@ -198,7 +195,7 @@ class VikingFS:
         if l2 is not None:
             entry.l2 = l2[:L1_MAX]
         entry.ts = time.time()
-        # 分类变化时迁移目录（合并后语义变了的重分类，方案文档 §5.1 Step 5）
+        # 分类变了就迁移目录
         if new_cat != old_cat:
             os.makedirs(self._category_dir(new_cat), exist_ok=True)
             os.replace(path, self._entry_file(entry_id, new_cat))
@@ -351,7 +348,7 @@ class VikingFS:
     # ---------- 诊断 ----------
 
     def describe_tree(self) -> str:
-        """打印虚拟文件系统树形结构，用于可诊断性排查（方案文档 §4.4 检索轨迹）。"""
+        """打印虚拟文件系统树形结构，方便排查检索问题。"""
         lines = [MEMORIES_ROOT + "/"]
         for cat in self.list_categories():
             ab, _ = self.read_dir_meta(cat)

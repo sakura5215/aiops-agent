@@ -1,16 +1,14 @@
 """
-AIOps 记忆系统真实可跑测试
-==========================
+AIOps 记忆系统测试
+==================
 
-诚实标注三类：
+分三类：
   [REAL]  真实跑：滑动窗口、会话隔离、记忆 JSON 持久化 round-trip
   [MOCK]  mock LLM/Milvus 后测真实解析与合并逻辑：
             mem0 事实抽取的解析、ADD/UPDATE/MERGE/DELETE 决策解析、
             _apply 合并逻辑、VectorStore provider 路由
-  [SKIP]  跑不了 / 没做：
-            - Milvus 真实连接（pymilvus/langchain_milvus 未装）
-            - LLM 真实调用（dashscope 未装 + 无 DASHSCOPE_API_KEY）
-            - viking（L0/L1/L2 分层、目录递归检索、IntentAnalyzer）——只有方案文档，根本没落地
+  [SKIP]  本脚本不测：Milvus 真实连接、LLM 真实调用（这两项在
+          test_delivery_smoke.py 的 S3 里真实跑）；viking 见 test_viking.py
 
 运行：.venv/Scripts/python.exe tests/test_memory_system.py
 """
@@ -39,11 +37,12 @@ def check(name, cond, detail=""):
 
 
 def _stub_modules():
-    """预注入 fake module，绕过未安装的重型依赖（dashscope/pymilvus/langchain_milvus/langchain_chroma）。
+    """把重型依赖 stub 掉，让本脚本离线可跑：不联网调 LLM、不连向量库
+    （也避免测试进程占用 Milvus Lite 的 .db 文件锁）。
 
-    项目内 model.factory 会拉 dashscope；memory_store/vector_store 会拉
-    langchain_milvus/langchain_chroma/pymilvus/langchain_text_splitters。
-    这里把它们 stub 成空对象，让我们能 import 真实代码并测其中的纯解析/合并/路由逻辑。
+    stub 的对象：dashscope 侧的 model.factory，向量库侧的
+    langchain_milvus / langchain_chroma / pymilvus / langchain_text_splitters。
+    stub 之后能 import 真实代码并测其中的纯解析/合并/路由逻辑。
     langchain_core 必须真实安装（测滑动窗口需要 BaseChatMessageHistory 基类 + message 序列化）。
     """
     for m in ["model", "model.factory"]:
@@ -428,13 +427,13 @@ def test_memory_store_search_with_mock_vector():
 
 
 if __name__ == "__main__":
-    print("AIOps 记忆系统真实可跑测试")
+    print("AIOps 记忆系统测试")
     print("=" * 64)
-    print("诚实标注：")
+    print("分三类：")
     print("  [REAL] 真实跑：滑动窗口/会话隔离/JSON 持久化/search 召回")
     print("  [MOCK] mock LLM/Milvus 后测真实解析与合并逻辑")
-    print("  [SKIP] 跑不了：Milvus 真实连接、LLM 真实调用（无 API key）")
-    print("  [SKIP] 没做  ：viking（L0/L1/L2 分层/目录递归/IntentAnalyzer）——只有方案文档")
+    print("  [SKIP] 本脚本不测：Milvus 真实连接、LLM 真实调用（见 test_delivery_smoke.py S3）")
+    print("  [SKIP] 没测  ：viking（L0/L1/L2 分层/目录递归/IntentAnalyzer，见 test_viking.py）")
     print("=" * 64)
 
     tests = [

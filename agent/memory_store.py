@@ -9,10 +9,10 @@ mem0 式长期记忆：轻量实现两阶段流水线，借鉴 mem0 的设计但
 让新事实在 prompt 中优先呈现。事实原文与元数据以 JSON 文件为 source of truth，
 Milvus 向量库作为检索索引。
 
-写入是**增量 upsert**（Roadmap 1 已完成）：`fact_id` 为事实主键，新增只插不重建；
+写入是**增量 upsert**：`fact_id` 为事实主键，新增只插不重建；
 被替换的旧事实按 `fact_id` 差集从向量库删掉，不再 drop collection 全量重插。
 注意 viking 开启后（`agent_conf.viking_enabled`）Agent 走 `agent.viking.memory_viking`，
-本文件退化为 viking 不可用时的兜底实现。
+本文件只在 viking 关闭或初始化失败时作为扁平版兜底。
 """
 import hashlib
 import os
@@ -180,11 +180,11 @@ class MemoryStore:
             return set()
 
     def _sync_vector(self, existing: list[dict]):
-        """增量 upsert（Roadmap 1）。
+        """增量 upsert。
 
-        v1 是全量 drop + 重建，事实库一大就变成纯开销。这里改成：
+        最早的做法是全量 drop + 重建，事实一多就是纯开销。现在改成：
         - 以 fact_id 为主键，只插入"索引里没有"的新事实（Milvus add_documents 按主键覆盖，天然 upsert）
-        - 用差集删掉"断言里已不存在"的旧向量，保证索引与 JSON 事实库一致
+        - 用差集删掉"事实库里已不存在"的旧向量，保证索引与 JSON 事实库一致
         - 全程不 drop collection
         """
         for e in existing:

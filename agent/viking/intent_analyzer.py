@@ -1,9 +1,7 @@
 """
 viking IntentAnalyzer：把用户 query 拆成 0-5 个 TypedQuery，决定去哪类上下文里检索。
 
-对应方案文档 §4.1（viking 文档的机制）与 §4.6（find/search 的分流，工程判断）：
-
-- viking 的 IntentAnalyzer 用 LLM 分析意图，输入是 [会话压缩摘要 + 最近 5 条消息 + 当前 query]，
+- 用 LLM 分析意图，输入是 [会话压缩摘要 + 最近 5 条消息 + 当前 query]，
   输出 0-5 个 TypedQuery(query / context_type / intent / priority)。
 - 不同 context_type 用不同的 query 改写风格：skill 动词优先、resource 名词短语、
   memory 用 "User's XX"。目的是让改写后的 query 主动适配目标存储的语义空间。
@@ -49,7 +47,7 @@ class TypedQuery:
         }[ContextType(self.context_type)]
 
 
-# 不同 context_type 的 query 改写风格（viking 文档明确）
+# 不同 context_type 的 query 改写风格
 QUERY_STYLE = {
     ContextType.MEMORY: "写成 \"User's XX\" 形式，例如 \"User's code style preferences\"",
     ContextType.RESOURCE: "写成名词短语，例如 \"API usage guide\"",
@@ -89,7 +87,7 @@ def parse_typed_queries(content: str, default_type: ContextType = ContextType.ME
     """解析 LLM 输出的 TypedQuery 列表（纯函数，不调 LLM，便于单测）。
 
     容错：识别 `MEMORY | query | intent | 5` 四列形式，也接受只有两列
-    `MEMORY | query` 的退化形式。非法行丢弃，不抛异常。
+    `MEMORY | query` 的简写。解析不了的行直接丢弃，不抛异常。
     """
     out: list[TypedQuery] = []
     if not content:
@@ -131,9 +129,9 @@ QUESTION_WORDS = ("怎么", "怎样", "如何", "为什么", "为何", "哪些",
 
 
 def should_use_search(query: str) -> bool:
-    """find() 还是 search()（方案文档 §4.6 的工程判断，非 viking 既定机制）。
+    """find() 还是 search()。
 
-    AIOps 的运维问题天然多意图，默认走 search()；只把"短且无疑问"的输入降级到 find()，
+    运维问题大多数是多意图的，默认走 search()；只把"短且没有疑问"的输入走 find()，
     省掉一次 IntentAnalyzer 的 LLM 调用。
 
     疑问判定同时看：问号、句末语气词、中文疑问词。因为中文口语提问很少打问号。

@@ -1,8 +1,7 @@
 """viking L0 向量索引：目录级摘要与条目级摘要的向量化索引。
 
-对应方案文档 §4.2/§4.5：存入 Milvus 的不是完整记忆，而是每条记忆的 L0 向量。
-检索第五层的 initial positioning（扫目录级 L0）和 refined exploration
-（目录内扫条目级 L0）都建立在这个索引上。
+存进 Milvus 的不是完整记忆，而是每条记忆的 L0 向量。检索时先扫目录级 L0
+定位目录，再在目录内扫条目级 L0 精确定位，两步都建立在这个索引上。
 
 索引里混存两类文本，用 metadata["level"] 区分：
 - level="dir"   目录级 L0，即 .abstract.md 的内容

@@ -1,29 +1,20 @@
-"""自研 Agent Loop：裸写 ReAct 循环，替代对 create_agent 的黑盒依赖。
+"""自写 ReAct 循环。create_agent 把循环包在框架里，很多细节看不到也改不了，
+所以这里直接自己写一遍循环，顺带把几个实际问题处理掉：
 
-动机：LangChain 的 create_agent 把「推理循环」藏在框架内部，面试时说不清循环
-本体、终止条件、上下文治理。本模块把循环摊开，补齐三个工程治理点：
+1. 步数上限（max_steps）      —— 防止模型在某个工具上反复打转，超了就强制结束。
+2. 重复调用检测（dedup）      —— 同一个工具 + 同样的参数连着调，就提示模型换个思路。
+3. 上下文压缩（compress）     —— 步数或 token 超了阈值，把前面的工具结果用 LLM
+                                 摘要成一段，别让上下文越滚越大。
 
-1. 步数上限（max_steps）      —— 防模型在一个死循环里反复打转，超限强制终止。
-2. 重复调用检测（dedup）      —— 同一工具 + 同一参数连续调用 2 次，注入提示让模型换思路。
-3. 上下文压缩（compress）     —— 步数或 token 任一触发时，把早期 tool observation
-                                 用 LLM 摘要成一段（而非字符串拼接），替代原文控制 token 膨胀。
+循环本身：
+    messages ──调模型──▶ 有没有 tool_calls? ──有──▶ 执行工具 ──把结果塞回 messages ──▶ 回到开头
+                                            └─没有──▶ 直接返回最终回答
 
-同时保留原 create_agent 版的两项语义，做到「平替不降级」：
-- 双场景提示词：检测到信号工具 fill_context_for_report 被调用后，下一轮切报告提示词。
-- 9 个工具：直接复用 agent/tools/agent_tools.py，schema 由 LangChain 的 @tool 自动生成。
+跟 create_agent 版共用同一套 9 个工具和双场景提示词（fill_context_for_report
+触发报告提示词切换），config/agent.yml 里 custom_loop_enabled 可以切回原版对照。
 
-循环本体（与任何框架等价）：
-    messages ──调模型──▶ tool_calls? ──是──▶ 执行工具 ──ToolMessage 回填──▶ 回到顶部
-                          └─否──▶ 最终回答，结束
-
-对齐主流框架（自审结论，面试可讲）：
-- 步数上限对齐 openai-agents 的 DEFAULT_MAX_TURNS=10 / Claude SDK 的 3~10 turn。
-- 压缩用「LLM 语义摘要」对齐 LangChain SummarizationMiddleware / Anthropic automatic
-  compaction / Claude progressive summarisation（都用小模型摘要，而非拼接原文）。
-- 触发用「步数 OR token 阈值任一命中」对齐 LangChain trigger=[(...), (...)] 的任一触发语义。
-  token 计数走 utils/token_counter.py，用 Qwen3 原生 tokenizer 精确计数（qwen3-max
-  与 Qwen3 开源系共享词表），不再用 GPT-2 近似值；仅在离线/未装依赖时回退并显式
-  标记 degraded（真实容错，非假装精确）。
+token 计数用 utils/token_counter.py 里的 Qwen3 tokenizer（跟 qwen3-max 同一套
+词表），不是 GPT-2 那种粗略估的；只在没网/没装依赖时才退回 GPT-2 并记个日志。
 """
 from __future__ import annotations
 
@@ -69,7 +60,7 @@ REPORT_SIGNAL_TOOL = "fill_context_for_report"
 
 @dataclass
 class LoopTrace:
-    """一次任务执行的可诊断轨迹（对齐腾讯 A2A 台账的思路，让 loop 不再是黑盒）。"""
+    """记录一次任务跑的过程，方便之后排查（每一步调了哪个工具、怎么结束的）。"""
 
     steps: list[dict] = field(default_factory=list)
     max_steps: int = 0
@@ -90,10 +81,10 @@ class LoopTrace:
 
 
 def _execute_tool(name: str, args: dict) -> str:
-    """执行单个工具调用，返回字符串结果（含未知工具 / 异常兜底）。"""
+    """执行单个工具调用，返回字符串结果（未知工具 / 异常时返回错误文案）。"""
     fn = TOOL_FUNCTIONS.get(name)
     if fn is None:
-        # 幻觉工具兜底：模型编了个不存在的工具名
+        # 模型编了个不存在的工具名
         return f"ERROR: 未知工具 {name}，请从已提供的工具中选择"
     try:
         result = fn.invoke(args) if hasattr(fn, "invoke") else fn(**args)
@@ -104,11 +95,11 @@ def _execute_tool(name: str, args: dict) -> str:
 
 
 def _summarize_tool_results(tool_texts: list[str], summarizer, retries: int = 1) -> str:
-    """把一批工具结果用 LLM 摘要成一段（对齐 LangChain SummarizationMiddleware 的做法）。
+    """把一批工具结果丢给 LLM 提炼成一段摘要。
 
-    summarizer 是「接收文本、返回摘要文本」的可调用对象，默认走项目 chat_model，
-    测试时注入 mock 以离线可跑。LLM 偶发超时/限流时重试一次，仍失败才降级为
-    原文拼接（保留信息优于丢弃，是真实容错而非静默失败）。
+    summarizer 是「接收文本、返回摘要」的可调用对象，默认用项目 chat_model，
+    测试时换成 mock。LLM 偶发超时或限流会先重试一次，还不行就退回原文拼接，
+    保证压缩失败也不丢信息。
     """
     joined = "\n".join(f"- {t}" for t in tool_texts)
     prompt = (
@@ -131,14 +122,11 @@ def _summarize_tool_results(tool_texts: list[str], summarizer, retries: int = 1)
 def _compress_observations(
     messages: list[BaseMessage], start: int, end: int, summarizer=None
 ) -> None:
-    """把 [start, end) 区间内的 tool 消息用 LLM 摘要成一条，原位替换。
+    """把 [start, end) 区间的 tool 消息摘要成一条，替换回原位。
 
-    只压缩 role=tool 的消息；assistant 的 tool_calls 结构（含 tool_call_id）必须保留，
-    否则消息序列对不上。做法：把被压缩区间的 tool 内容交给 LLM 提炼成一段摘要，
-    写回第一条 tool 消息，其余 tool 消息内容置空（占位保序）。相比旧版「字符串拼接」，
-    语义摘要真正降低了 token，且保留了结论信息。
-
-    summarizer 缺省为 None 时在 ReActLoop 内注入（见 _default_summarizer）。
+    只动 role=tool 的消息；assistant 里的 tool_calls 结构（含 tool_call_id）要
+    留着，不然消息对不上。做法：把这个区间所有 tool 内容交给 LLM 提炼成一段，
+    写进第一条 tool 消息，其余 tool 消息内容清成占位。这样既省 token，结论也没丢。
     """
     tool_texts = []
     for i in range(start, end):
@@ -166,7 +154,7 @@ def _compress_observations(
 
 
 def _default_summarizer():
-    """返回一个用项目 chat_model 做摘要的可调用对象（惰性 import 避免循环依赖）。"""
+    """返回一个用项目 chat_model 做摘要的可调用对象（延迟 import，避免循环依赖）。"""
     def summarize(text: str) -> str:
         from langchain_core.messages import HumanMessage
         from model.factory import chat_model as cm
@@ -185,7 +173,7 @@ def _default_summarizer():
 
 
 class ReActLoop:
-    """裸写的 ReAct Agent Loop，零框架依赖（仅用 LangChain 的消息类型和模型绑定）。"""
+    """自己写的 ReAct 循环，只用 LangChain 的消息类型和模型绑定，不套上层框架。"""
 
     def __init__(self):
         # 绑定 9 个工具，tool_choice=auto：模型自由决定调不调工具
@@ -215,9 +203,7 @@ class ReActLoop:
         # 为简化，这里假设 messages 的 system 已由调用方注入（含长期记忆召回），
         # 我们只在切报告提示词时替换掉首条 system。
         for step in range(1, self.max_steps + 1):
-            # 切报告提示词：替换首条 system 为报告场景提示词（保留长期记忆注入时，
-            # 长期记忆那条是临时加的 SystemMessage，会被这里一起顶掉——故调用方约定：
-            # 长期记忆召回只注入一条 system，报告切换时以其为基础追加而非覆盖，见 _swap_system）
+            # 根据当前是否报告模式，替换 system 提示词
             self._apply_prompt_mode(messages, report_mode)
 
             resp = self.llm.invoke(messages)
@@ -256,8 +242,7 @@ class ReActLoop:
                 )
                 trace.record({"step": step, "tool": name, "args": args})
 
-            # 上下文压缩：步数阈值 OR token 阈值任一命中即触发（对齐 LangChain
-            # SummarizationMiddleware 的 trigger=[("fraction",..), ("messages",..)] 语义）
+            # 步数或 token 超了阈值就压缩一次
             if not trace.compressed and self._should_compress(step, messages):
                 if self._compress_if_needed(messages):
                     trace.compressed = True
@@ -272,9 +257,8 @@ class ReActLoop:
     def _apply_prompt_mode(self, messages: list[BaseMessage], report_mode: bool) -> None:
         """切换 system 提示词：报告模式用报告提示词，否则用运维问答提示词。
 
-        约定：调用方注入长期记忆时，只允许在 messages 首部放一条 SystemMessage
-        （长期记忆事实）。这里若检测到多条 system，保留最后一条（长期记忆）并把它
-        追加到场景提示词之后，避免覆盖长期记忆。
+        长期记忆是通过一条额外的 SystemMessage 注入的，切换提示词时不能把它顶掉，
+        所以这里保留最后一条 system（长期记忆），只替换最前面的场景提示词。
         """
         prompt = load_report_prompts() if report_mode else load_system_prompts()
         # 找到所有 system 消息的索引
@@ -294,11 +278,10 @@ class ReActLoop:
             messages.insert(1, keep)
 
     def _should_compress(self, step: int, messages: list[BaseMessage]) -> bool:
-        """判断是否该触发压缩：步数阈值 OR token 阈值任一命中。
+        """判断要不要压缩：步数到了，或者非 system 消息的 token 累计超了阈值。
 
-        token 计数用 Qwen3 原生 tokenizer（utils/token_counter.py），对 qwen3-max
-        精确；仅离线/未装依赖时回退 GPT-2 并标记 degraded。仅累计非 system 消息的
-        正文，避免把固定提示词算进去导致误触发。
+        token 用 Qwen3 tokenizer 精确数（utils/token_counter.py），没网/没装依赖
+        时才退回 GPT-2 估。只数非 system 消息，避免固定提示词把阈值撑爆。
         """
         if step >= self.compress_after_steps:
             return True
@@ -315,11 +298,9 @@ class ReActLoop:
             return False
 
     def _compress_if_needed(self, messages: list[BaseMessage]) -> bool:
-        """触发压缩：把首轮之后、最后一轮之前的 tool 消息摘要合并。
+        """真压缩：把第一条到最后一条之间的 tool 消息合并，留最后一条。
 
-        简单策略：找到第一个 tool 消息和最后一个 tool 消息，压缩中间区间。
-        保证最后一条 tool（本轮刚加的，模型最需要）不被压缩。
-        返回是否真的发生了压缩（tool 消息不足时不压，返回 False）。
+        返回是否真的压了（tool 消息太少就直接不压，返回 False）。
         """
         tool_idxs = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
         if len(tool_idxs) < 3:  # 少于 3 条 tool 没必要压

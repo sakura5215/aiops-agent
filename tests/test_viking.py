@@ -1,7 +1,7 @@
 """
 viking 分层记忆单元测试。
 
-覆盖 viking 方案文档落地的所有组件：
+覆盖 viking 的各个组件：
   A. VikingFS        虚拟文件路径、条目三级、目录级 L0/L1、dirty 惰性刷新
   B. IntentAnalyzer  TypedQuery 解析、context_type 分流、find/search 选择
   C. L0Index         向量索引与 level/category 过滤
@@ -472,7 +472,7 @@ def test_memory_store_viking(tmp):
     ab, _ = vfs2.read_dir_meta(target_cat)
     check("E17 刷新后摘要反映条目数", "条记忆" in ab, ab)
 
-    # 三类检索源（viking 统一 memories/resources/skills，方案文档 §4.9）
+    # 三类检索源（memories / resources / skills 统一存 viking）
     store2.commit_resource("kb-1", "Prometheus 查询指南", "prometheus query language 用法")
     check("E18 RESOURCE 目录写入", vfs2.entry_count("resources") == 1)
     store2.commit_skill("skill-metric", "查询服务监控指标", "调用 fetch_metric_data 获取 cpu/内存")
