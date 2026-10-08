@@ -5,8 +5,8 @@
 
 1. 步数上限（max_steps）      —— 防模型在一个死循环里反复打转，超限强制终止。
 2. 重复调用检测（dedup）      —— 同一工具 + 同一参数连续调用 2 次，注入提示让模型换思路。
-3. 上下文压缩（compress）     —— 超过 compress_after_steps 步时，把早期 tool observation
-                                 用 LLM 摘要成一段，替代原文，控制 token 膨胀。
+3. 上下文压缩（compress）     —— 步数或 token 任一触发时，把早期 tool observation
+                                 用 LLM 摘要成一段（而非字符串拼接），替代原文控制 token 膨胀。
 
 同时保留原 create_agent 版的两项语义，做到「平替不降级」：
 - 双场景提示词：检测到信号工具 fill_context_for_report 被调用后，下一轮切报告提示词。
@@ -15,6 +15,14 @@
 循环本体（与任何框架等价）：
     messages ──调模型──▶ tool_calls? ──是──▶ 执行工具 ──ToolMessage 回填──▶ 回到顶部
                           └─否──▶ 最终回答，结束
+
+对齐主流框架（自审结论，面试可讲）：
+- 步数上限对齐 openai-agents 的 DEFAULT_MAX_TURNS=10 / Claude SDK 的 3~10 turn。
+- 压缩用「LLM 语义摘要」对齐 LangChain SummarizationMiddleware / Anthropic automatic
+  compaction / Claude progressive summarisation（都用小模型摘要，而非拼接原文）。
+- 触发用「步数 OR token 阈值任一命中」对齐 LangChain trigger=[(...), (...)] 的任一触发语义。
+  注：token 计数走 get_num_tokens 的 GPT-2 fallback，对 Qwen 不是精确值，但作为
+  「上下文占用是否够长」的单调代理指标够用（这是诚实边界，不冒充精确预算）。
 """
 from __future__ import annotations
 
@@ -93,12 +101,35 @@ def _execute_tool(name: str, args: dict) -> str:
         return f"ERROR: 工具 {name} 执行失败：{e}"
 
 
-def _compress_observations(messages: list[BaseMessage], start: int, end: int) -> None:
-    """把 [start, end) 区间内的 tool 消息摘要成一条，原位替换。
+def _summarize_tool_results(tool_texts: list[str], summarizer) -> str:
+    """把一批工具结果用 LLM 摘要成一段（对齐 LangChain SummarizationMiddleware 的做法）。
+
+    summarizer 是「接收文本、返回摘要文本」的可调用对象，默认走项目 chat_model，
+    测试时注入 mock 以离线可跑。
+    """
+    joined = "\n".join(f"- {t}" for t in tool_texts)
+    prompt = (
+        "请把以下多步工具查询/检索的结果提炼成要点摘要，保留关键数据、异常结论与"
+        "排查线索，去掉重复和无关细节，控制在 300 字以内：\n" + joined
+    )
+    try:
+        return summarizer(prompt)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[react_loop]摘要失败，降级为原文拼接: {e}")
+        return "[已压缩的历史工具结果] 要点汇总：\n" + joined
+
+
+def _compress_observations(
+    messages: list[BaseMessage], start: int, end: int, summarizer=None
+) -> None:
+    """把 [start, end) 区间内的 tool 消息用 LLM 摘要成一条，原位替换。
 
     只压缩 role=tool 的消息；assistant 的 tool_calls 结构（含 tool_call_id）必须保留，
-    否则消息序列对不上。做法：把被压缩区间的 tool 内容汇总成一段文本，写回第一条
-    tool 消息，其余 tool 消息内容置空（占位保序）。
+    否则消息序列对不上。做法：把被压缩区间的 tool 内容交给 LLM 提炼成一段摘要，
+    写回第一条 tool 消息，其余 tool 消息内容置空（占位保序）。相比旧版「字符串拼接」，
+    语义摘要真正降低了 token，且保留了结论信息。
+
+    summarizer 缺省为 None 时在 ReActLoop 内注入（见 _default_summarizer）。
     """
     tool_texts = []
     for i in range(start, end):
@@ -107,9 +138,9 @@ def _compress_observations(messages: list[BaseMessage], start: int, end: int) ->
             tool_texts.append(m.content if isinstance(m.content, str) else str(m.content))
     if not tool_texts:
         return
-    summary = (
-        "[已压缩的历史工具结果] 早前多步检索/查询的要点汇总：\n" + "\n".join(tool_texts)
-    )
+    if summarizer is None:
+        summarizer = _default_summarizer()
+    summary = _summarize_tool_results(tool_texts, summarizer)
     first_tool_written = False
     for i in range(start, end):
         m = messages[i]
@@ -125,6 +156,25 @@ def _compress_observations(messages: list[BaseMessage], start: int, end: int) ->
                 )
 
 
+def _default_summarizer():
+    """返回一个用项目 chat_model 做摘要的可调用对象（惰性 import 避免循环依赖）。"""
+    def summarize(text: str) -> str:
+        from langchain_core.messages import HumanMessage
+        from model.factory import chat_model as cm
+        resp = cm.invoke([HumanMessage(content=text)])
+        content = resp.content if hasattr(resp, "content") else str(resp)
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("text"):
+                    parts.append(block["text"])
+                elif isinstance(block, str):
+                    parts.append(block)
+            content = "".join(parts)
+        return str(content)
+    return summarize
+
+
 class ReActLoop:
     """裸写的 ReAct Agent Loop，零框架依赖（仅用 LangChain 的消息类型和模型绑定）。"""
 
@@ -133,7 +183,11 @@ class ReActLoop:
         self.llm = chat_model.bind_tools(list(TOOL_FUNCTIONS.values()), tool_choice="auto")
         self.max_steps = int(agent_conf.get("loop_max_steps", 8))
         self.compress_after_steps = int(agent_conf.get("compress_after_steps", 6))
+        # token 阈值：上下文累计超过该值即触发压缩（与步数阈值「任一命中」即压）
+        self.compress_token_threshold = int(agent_conf.get("compress_token_threshold", 4000))
         self.dedup_max_repeat = int(agent_conf.get("dedup_max_repeat", 2))
+        # 摘要器：默认走 chat_model，测试可注入 mock
+        self.summarizer = _default_summarizer()
 
     def run(self, messages: list[BaseMessage]) -> tuple[str, LoopTrace]:
         """执行一次任务。输入 messages 已含 system + 历史 + 用户提问（调用方负责拼接）。
@@ -191,10 +245,11 @@ class ReActLoop:
                 )
                 trace.record({"step": step, "tool": name, "args": args})
 
-            # 上下文压缩：超过阈值步数后，把最早期的一批 tool observation 摘要掉
-            if step >= self.compress_after_steps and not trace.compressed:
-                self._compress_if_needed(messages)
-                trace.compressed = True
+            # 上下文压缩：步数阈值 OR token 阈值任一命中即触发（对齐 LangChain
+            # SummarizationMiddleware 的 trigger=[("fraction",..), ("messages",..)] 语义）
+            if not trace.compressed and self._should_compress(step, messages):
+                if self._compress_if_needed(messages):
+                    trace.compressed = True
 
         trace.terminal_reason = "max_steps"
         return (
@@ -227,21 +282,44 @@ class ReActLoop:
         if keep is not None:
             messages.insert(1, keep)
 
-    def _compress_if_needed(self, messages: list[BaseMessage]) -> None:
+    def _should_compress(self, step: int, messages: list[BaseMessage]) -> bool:
+        """判断是否该触发压缩：步数阈值 OR token 阈值任一命中。
+
+        token 计数用 get_num_tokens（GPT-2 fallback），对 Qwen 非精确值，但作为
+        「上下文占用是否够长」的单调代理指标够用。仅累计非 system 消息的正文，
+        避免把固定提示词算进去导致误触发。
+        """
+        if step >= self.compress_after_steps:
+            return True
+        try:
+            total = 0
+            for m in messages:
+                if isinstance(m, SystemMessage):
+                    continue
+                content = m.content if isinstance(m.content, str) else str(m.content)
+                total += self.llm.get_num_tokens(content)
+            return total >= self.compress_token_threshold
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[react_loop]token 计数不可用，退化为步数触发: {e}")
+            return False
+
+    def _compress_if_needed(self, messages: list[BaseMessage]) -> bool:
         """触发压缩：把首轮之后、最后一轮之前的 tool 消息摘要合并。
 
         简单策略：找到第一个 tool 消息和最后一个 tool 消息，压缩中间区间。
         保证最后一条 tool（本轮刚加的，模型最需要）不被压缩。
+        返回是否真的发生了压缩（tool 消息不足时不压，返回 False）。
         """
         tool_idxs = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
         if len(tool_idxs) < 3:  # 少于 3 条 tool 没必要压
-            return
+            return False
         # 压缩 [first, last) 之间的 tool 消息，留最后一条
         start, end = tool_idxs[0], tool_idxs[-1]
         if end - start < 2:
-            return
+            return False
         logger.info(f"[react_loop]触发上下文压缩：合并 {len(tool_idxs)} 条 tool 消息")
-        _compress_observations(messages, start, end)
+        _compress_observations(messages, start, end, summarizer=self.summarizer)
+        return True
 
     @staticmethod
     def _extract_text(ai_msg: AIMessage) -> str:

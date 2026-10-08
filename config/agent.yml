@@ -18,6 +18,9 @@ viking_entry_threshold: 0.25
 loop_max_steps: 8
 # 上下文压缩触发步数：达到该步数后，把早期 tool observation 摘要成一段
 compress_after_steps: 6
+# 上下文压缩 token 阈值：非 system 消息正文累计超过该值也触发压缩（与步数「任一命中」即压）
+# 注：token 计数走 get_num_tokens 的 GPT-2 fallback，对 Qwen 非精确值，作「占用是否够长」的代理指标
+compress_token_threshold: 4000
 # 重复调用检测：同一工具+同一参数连续调用该次数后，注入提示让模型换思路
 dedup_max_repeat: 2
 # 是否启用自研 Loop（false 时回退 create_agent）

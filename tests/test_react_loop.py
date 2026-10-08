@@ -3,11 +3,12 @@
 覆盖四个治理点 + 兜底：
   [MOCK] 步数上限（max_steps 强制终止）
   [MOCK] 重复调用检测（同一工具+参数连续调用注入提示）
-  [MOCK] 上下文压缩（早期 tool observation 摘要合并）
+  [MOCK] 上下文压缩（LLM 摘要早期 tool observation，非字符串拼接）
+  [MOCK] token 阈值触发压缩
   [MOCK] 报告信号切换（fill_context_for_report 触发 report_mode）
   [MOCK] 幻觉工具 / 未知工具兜底
 
-通过注入 fake llm（mock 掉 bind_tools 后的 invoke）来驱动循环分支，不触网。
+通过注入 fake llm（mock 掉 bind_tools 后的 invoke）和 mock 摘要器来驱动循环分支，不触网。
 
 运行：.venv/Scripts/python.exe tests/test_react_loop.py
 """
@@ -61,13 +62,20 @@ class _FakeLLM:
             return self.script.pop(0)
         return _ai_final()
 
+    def get_num_tokens(self, text):
+        # 近似 token 计数：按字符数 / 2 粗估（仅测试用，触发 token 阈值）
+        return max(1, len(text) // 2)
+
 
 def _make_loop(llm_script, **kw):
     loop = ReActLoop()
     loop.llm = _FakeLLM(llm_script)
     loop.max_steps = kw.get("max_steps", 8)
     loop.compress_after_steps = kw.get("compress_after_steps", 6)
+    loop.compress_token_threshold = kw.get("compress_token_threshold", 4000)
     loop.dedup_max_repeat = kw.get("dedup_max_repeat", 2)
+    # 默认注入 mock 摘要器（离线可跑），返回带标记的摘要便于断言
+    loop.summarizer = kw.get("summarizer", lambda text: "【摘要】" + text[:20])
     return loop
 
 
@@ -97,16 +105,37 @@ def test_dedup_repeat():
 
 
 def test_compress():
-    # 5 条 tool 消息 → 压缩后首条变为摘要、其余占位，且 tool_call_id 保留
+    # 5 条 tool 消息 → 压缩后首条为 LLM 摘要、其余占位，且 tool_call_id 保留
     msgs = [
         ToolMessage(content="r1", tool_call_id="c1"),
         ToolMessage(content="r2", tool_call_id="c2"),
         ToolMessage(content="r3", tool_call_id="c3"),
     ]
-    _compress_observations(msgs, 0, 3)
-    check("压缩后首条为摘要", "已压缩的历史工具结果" in msgs[0].content, msgs[0].content[:30])
+    calls = []
+    _compress_observations(msgs, 0, 3, summarizer=lambda t: calls.append(t) or "【LLM摘要】")
+    check("压缩后首条为 LLM 摘要", msgs[0].content == "【LLM摘要】", msgs[0].content[:30])
     check("压缩后其余占位", "已并入上文摘要" in msgs[1].content and "已并入上文摘要" in msgs[2].content)
     check("tool_call_id 保留", all(m.tool_call_id for m in msgs))
+    check("摘要器收到全部工具结果", len(calls) == 1 and "r1" in calls[0] and "r3" in calls[0], repr(calls[0][:40]) if calls else "未调用")
+
+
+def test_token_trigger_compress():
+    # 用 token 阈值触发：前两轮积累 tool 消息，第三轮时 token 累计超阈值触发压缩
+    summary_log = []
+    loop = _make_loop(
+        [
+            _ai_with_tools("fetch_metric_data", {"service_name": "order-service", "time_range": "最近1小时"}),
+            _ai_with_tools("fetch_log_summary", {"service_name": "order-service", "time_range": "最近1小时"}),
+            _ai_with_tools("fetch_alert_data", {"service_name": "order-service", "time_range": "最近1小时"}),
+            _ai_final("完成"),
+        ],
+        compress_after_steps=99,  # 把步数阈值调高，确保是 token 阈值触发
+        compress_token_threshold=150,  # 累积几轮 tool 结果后超阈值
+        summarizer=lambda t: summary_log.append(t) or "【摘要】",
+    )
+    text, trace = loop.run([SystemMessage(content="s"), HumanMessage(content="q")])
+    check("token 阈值触发压缩", trace.compressed, trace.summary())
+    check("摘要器被调用", len(summary_log) >= 1, f"调用次数={len(summary_log)}")
 
 
 def test_report_signal():
@@ -140,6 +169,7 @@ if __name__ == "__main__":
     test_max_steps()
     test_dedup_repeat()
     test_compress()
+    test_token_trigger_compress()
     test_report_signal()
     test_unknown_tool()
     test_real_tool_execute()
