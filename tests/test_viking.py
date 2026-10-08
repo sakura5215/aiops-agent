@@ -8,8 +8,6 @@ viking 分层记忆单元测试。
   D. 目录递归检索     五步流程、阈值过滤、L1 默认终点、L2 下钻、retrieval trace
   E. VikingMemoryStore hash 硬去重、分类路由、同目录相似度、合并路径、commit
 
-说明：LLM 与向量库全部 mock（FakeLLM + 确定性 hash embedding），不依赖
-DASHSCOPE_API_KEY；纯逻辑部分（解析、阈值、轨迹、去重）是真实执行的。
 """
 import math
 import os
