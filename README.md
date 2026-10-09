@@ -140,7 +140,7 @@ full_messages = [SystemMessage(recalled)] + full_messages  # 长期事实以 Sys
 
 ### 4.4 写路径的降级链
 
-viking 初始化失败时不关闭长期记忆，而是回退到 mem0 扁平版（`agent/memory_store.py`）。两者都初始化失败才彻底关闭长期记忆，但 Agent 本身仍能跑——长期记忆是增强项不是必需项。
+viking 初始化失败时不关闭长期记忆，而是回退到 mem0 扁平版（`agent/memory_store.py`）。两者都初始化失败才彻底关闭长期记忆，但 Agent 本身仍能跑，因为长期记忆是增强项不是必需项。
 
 ## 五、向量库 adapter（Chroma / Milvus Lite 切换）
 
