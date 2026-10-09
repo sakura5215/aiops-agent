@@ -25,7 +25,7 @@ flowchart TD
     SP1 --> MODEL[Qwen 大模型]
     SP2 --> MODEL
     MODEL --> TC{工具调用决策}
-    TC --> TOOLS[9 工具 ReAct 闭环]
+    TC --> TOOLS[9 工具 ReAct 设计]
     TOOLS --> MON[monitor_tool 中间件]
     MON -->|fill_context_for_report| CTX[runtime.context.report=True]
     CTX --> DP
@@ -52,7 +52,7 @@ flowchart TD
 
 这样做的收益是把"场景识别"从脆弱的自然语言判断变成了确定的工具调用信号。自然语言判断的失败模式是隐性的（"分析一下"和"生成报告"对模型来说边界模糊），工具调用是显式的、可观测的、可测试的。要扩展到更多场景，再挂一个对应信号工具 + 中间件分支即可。
 
-## 三、9 工具 ReAct 闭环
+## 三、9 工具 ReAct 设计
 
 | 工具 | 作用 |
 |---|---|
